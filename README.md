@@ -7,6 +7,7 @@ Shared training app for the May 15, 2027 10-mile race. It's a plain website host
 | File | What it is |
 |---|---|
 | `index.html`, `app.js` | The app |
+| `sw.js` | Lets the app open without internet (saves a copy of the app files on each phone) |
 | `config.js` | The one line that points the app at your Google Sheet |
 | `Code.gs` | The Google Sheet script (pasted into Google, not used by GitHub) |
 | `icon.svg`, `icon-180.png`, `manifest.webmanifest` | Home-screen icon |
@@ -57,5 +58,5 @@ Uploading `Code.gs` to GitHub doesn't change the script Google runs. To update i
 - **Privacy:** anyone with the link can see names, plans, completed workouts and effort ratings. Pain ratings are shown only on the phone of the person who entered them. You, as the Sheet's owner, can see everyone's pain ratings in the Workouts tab, so tell your Kru that.
 - **The Sheet:** the *Runners* tab holds the app's data (don't edit column D). The *Workouts* tab is a readable list of every logged session.
 - **Changing `Code.gs` later:** use **Deploy → Manage deployments → Edit → Version: New version**. That keeps the same URL. A *New deployment* creates a new URL that you'd have to paste into `config.js` again.
-- **Same person on two phones at once:** unsaved edits are queued per phone and uploaded in order. Log each workout from one device to keep it simple.
-- **Offline:** changes stay on the phone and retry every 15 seconds until they reach the Sheet.
+- **Offline:** the app opens without internet, showing the plan as it was last saved on that phone. Workouts you log offline stay on the phone and upload when you're back online.
+- **Two phones, one profile:** each edit is merged into the Sheet field by field, so logging on one phone never erases what you changed on the other. If both change the same field, the later save wins.

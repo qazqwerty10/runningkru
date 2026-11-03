@@ -181,7 +181,7 @@ async function call(url,opts){
     if(/Script function not found/i.test(text)) throw new SyncError('The Google script is missing doGet/doPost. Paste Code.gs again, save, and deploy a new version.','script');
     throw new SyncError('The Google script sent back a web page instead of data. Check that it is deployed as a Web app.','badresponse');
   }
-  if(j&&j.ok&&j.version!==2) throw new SyncError('The Google script is the old version. Paste in the new Code.gs, then Deploy → Manage deployments → Edit → New version.','oldscript');
+  if(j&&j.ok&&!(j.version>=3)) throw new SyncError('The Google script is the old version. Paste in the new Code.gs, then Deploy → Manage deployments → Edit → New version.','oldscript');
   if(!j||!j.ok){
     if(j&&j.error==='Unknown action') throw new SyncError('The Google script is the old version. Paste in the new Code.gs, then Deploy → Manage deployments → Edit → New version.','oldscript');
     throw new SyncError((j&&j.error)||'The sheet script reported an unknown error.',(j&&j.code)||'script');
@@ -217,8 +217,17 @@ function rebuild(){
 }
 function setMe(id){ME=id;store.set('c10-me',id);const q=store.get('c10-queue',null);if(q&&q.id===id&&Array.isArray(q.patches)){QUEUE=q.patches;REV=q.rev||0}else{QUEUE=[];REV=0}}
 let claiming=false;
+let CACHED_AT=null; // when the plan on screen came from this phone's saved copy
+function saveCache(){store.set('c10-cache',{at:Date.now(),me:ME,authed:AUTHED,runners:SERVER})}
+function loadCache(){
+  const c=store.get('c10-cache',null);
+  if(!c||!c.runners) return false;
+  SERVER=c.runners;AUTHED=!!(c.authed&&c.me===ME);LOADED=true;CACHED_AT=c.at;
+  if(ME&&!SERVER[ME]) setMe(null);
+  rebuild();return true;
+}
 function applyServer(j){
-  SERVER=j.runners||{};AUTHED=!!j.authed;LOADED=true;LASTSYNC=new Date();LOADERR=null;
+  SERVER=j.runners||{};AUTHED=!!j.authed;LOADED=true;LASTSYNC=new Date();LOADERR=null;CACHED_AT=null;
   if(ME){
     const r=SERVER[ME];
     if(!r){if(!QUEUE.length){setKey(ME,null);setMe(null)}}
@@ -226,6 +235,7 @@ function applyServer(j){
     else if(r.locked&&!AUTHED){LINKLOST=ME;setMe(null)} // key missing or replaced
   }
   rebuild();
+  saveCache();
 }
 async function claim(id,code){
   claiming=true;
@@ -248,9 +258,10 @@ function schedulePush(ms){clearTimeout(pushTimer);pushTimer=setTimeout(push,ms==
 async function push(){
   if(inflight||!QUEUE.length||!mine()||!SERVER[ME]) return;
   inflight=true; clearTimeout(retryTimer); paintSync();
-  const sentRev=QUEUE[QUEUE.length-1].rev, runner=clone(mine()), id=ME;
+  const sentRev=QUEUE[QUEUE.length-1].rev, id=ME;
   try{
-    const all=await apiPost({action:'save',id,token:keyFor(id),runner});
+    // send just the edits; the sheet merges them field by field into the stored record
+    const all=await apiPost({action:'patch',id,token:keyFor(id),patches:QUEUE.filter(q=>q.rev<=sentRev).map(q=>q.p)});
     if(ME===id){QUEUE=QUEUE.filter(q=>q.rev>sentRev); persistQueue();}
     SAVEERR=null; retryDelay=15000; applyServer(all);
   }catch(e){
@@ -267,6 +278,7 @@ function saveMine(patch){
   if(LOCAL){RUNNERS[ME]=deepMerge(clone(mine()),patch);store.set('c10-local',RUNNERS[ME]);render();return}
   QUEUE.push({rev:++REV,p:patch}); persistQueue(); rebuild(); render(); schedulePush();
 }
+const savedAgo=t=>{const m=Math.round((Date.now()-t)/60000);if(m<1)return 'just now';if(m<60)return m+' min ago';const d=new Date(t);return (dayNum(d)===dayNum(new Date())?'today':fmtDate(d))+' at '+d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})};
 const plural=(n,w)=>`${n} ${w}${n===1?'':'s'}`;
 function syncState(){
   if(LOCAL) return {s:'local',t:'This device only'};
@@ -274,6 +286,7 @@ function syncState(){
   if(inflight) return {s:'saving',t:'Saving…'};
   if(QUEUE.length&&SAVEERR) return {s:'offline',t:plural(QUEUE.length,'change')+' waiting to upload'};
   if(QUEUE.length) return {s:'saving',t:'Saving…'};
+  if(LOADERR&&CACHED_AT) return {s:'offline',t:'Offline · saved copy'};
   if(LOADERR&&!LASTSYNC) return {s:'offline',t:'Not connected'};
   if(LOADERR) return {s:'offline',t:'Connection lost'};
   return {s:'idle',t:mine()?'All changes saved':'Connected'};
@@ -290,12 +303,14 @@ function goLocal(){
 }
 
 async function boot(){
+  if('serviceWorker' in navigator&&window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(()=>{});
   if(!API){goLocal();return}
   store.set('c10-pending',null); // v1 full-copy format: replaying it could overwrite newer data
   // device link: #link=<id>.<key>
   const m=location.hash.match(/^#link=([a-z0-9]{6,32})\.([A-Z0-9]{12,})$/);
   if(m){setKey(m[1],m[2]);store.set('c10-me',m[1]);history.replaceState(null,'',location.pathname+location.search)}
   setMe(store.get('c10-me',null));
+  loadCache();
   render();
   await refresh();
   if(!mine()&&UI.tab==='today') UI.tab='crew';
@@ -328,7 +343,7 @@ function banners(){
   let h='';
   if(LOCAL) h+=`<div class="banner">Saving on this device only. The Kru sheet isn't connected yet (see README step 2).</div>`;
   const e=SAVEERR||LOADERR;
-  if(!LOCAL&&e&&(QUEUE.length||LOADERR)) h+=`<div class="banner err" role="alert"><div><b>${QUEUE.length?plural(QUEUE.length,'change')+' waiting to upload.':"Can't load the latest Kru data."}</b> ${esc(e)}${QUEUE.length?' Your changes are safe on this phone.':''}</div><button class="btn small" id="retrySync" type="button">Retry now</button></div>`;
+  if(!LOCAL&&e&&(QUEUE.length||LOADERR)) h+=`<div class="banner err" role="alert"><div><b>${QUEUE.length?plural(QUEUE.length,'change')+' waiting to upload.':"Can't load the latest Kru data."}</b> ${esc(e)}${QUEUE.length?' Your changes are safe on this phone.':''}${CACHED_AT?` Showing the plan saved on this phone ${savedAgo(CACHED_AT)}.`:''}</div><button class="btn small" id="retrySync" type="button">Retry now</button></div>`;
   if(ERR) h+=`<div class="banner" role="alert">${esc(ERR)}</div>`;
   return h;
 }
@@ -420,6 +435,9 @@ function sessionTitle(r){
   const tot=Math.round(fullSegs(r).reduce((a,s)=>a+s[1],0)/60), run=runSeconds(r.seg)/60;
   return r.seg.length===1?`${run}-minute continuous run`:`${tot}-minute run/walk`;
 }
+const sessMin=r=>Math.round(fullSegs(r).reduce((a,s)=>a+s[1],0)/60);
+// One wording everywhere: running time first, then the whole session including walks.
+const timeLabel=r=>r.kind==='interval'?`${+(runSeconds(r.seg)/60).toFixed(1)} min running · ${sessMin(r)} min total`:runShort(r);
 const EFFORT={easy:'Easy: you can speak in full sentences',goal:'Steady: start easy, finish strong',interval:'Easy jog: you can talk in short sentences'};
 function ratingRow(k,label,min,max,val,hint){
   let b='';for(let v=min;v<=max;v++){const z=k==='rpe'?'':v<=2?'g':v<=4?'a':'r';b+=`<button type="button" class="rt ${z}" data-rate="${k}" data-v="${v}" aria-pressed="${val===v}">${v}</button>`}
@@ -447,7 +465,8 @@ function weekStatus(r,mon,days,others){
     const worst=vals.length?Math.max(...vals):null;
     if(worst!=null&&worst>=5) return {c:'r',t:'Red: step back',d:'Pain reached 5/10 or higher. Stop running this week, drop back one week, and get it assessed if it persists.'};
     if(missing.length) return {c:'',t:'Check-in incomplete',d:`Add pain ratings for: ${missing.join(', ')}. The traffic light needs both ratings for every completed run.`+skipNote};
-    const later=pendingMorning?" Tomorrow morning's rating can still change this.":'';
+    if(pendingMorning) return {c:worst>=3?'a':'',t:'Awaiting next-morning check-in',d:`So far: ${worst==null?'no':'worst'} pain ${worst==null?'':worst+'/10 '}during the run${worst>=3?' (caution range)':''}. Rate how it feels tomorrow morning to finish the check-in.`+skipNote};
+    const later='';
     if(worst>=3) return {c:'a',t:'Amber: repeat this week',d:'Pain of 3–4/10 is acceptable if it settles within 24 hours, but hold here rather than progressing.'+later+skipNote};
     return {c:'g',t:'Green: on track',d:'Pain 0–2/10 and not worse the next morning. Progress as planned.'+later+skipNote};
   }
@@ -483,7 +502,7 @@ function renderToday(){
     if(ru.kind==='interval'){
       const segs=fullSegs(ru), tot=segs.reduce((a,s)=>a+s[1],0);
       sub=describeIntervals(ru.seg)+'. Starts and ends with a 5-minute brisk walk.';
-      body=`<div class="meta"><div><span class="eyebrow">Total time</span><b>${Math.round(tot/60)} min</b></div><div><span class="eyebrow">Running</span><b>${runSeconds(ru.seg)/60} min</b></div><div><span class="eyebrow">Effort</span><b class="word">${EFFORT.interval}</b></div></div>
+      body=`<div class="meta"><div><span class="eyebrow">Running</span><b>${+(runSeconds(ru.seg)/60).toFixed(1)} min</b></div><div><span class="eyebrow">Total</span><b>${Math.round(tot/60)} min</b></div><div><span class="eyebrow">Effort</span><b class="word">${EFFORT.interval}</b></div></div>
       <div class="segbar" aria-hidden="true">${segs.map(s=>`<span class="s-${s[0]}" style="flex:${s[1]}"></span>`).join('')}</div>
       <div class="legend"><span><i class="s-run"></i>Run</span><span><i class="s-walk"></i>Walk</span><span><i class="s-warm"></i>Warm-up / cool-down</span></div>
       <details class="more"><summary>How to run it</summary><p class="muted">${esc(runDetail(ru))}</p></details>`;
@@ -532,7 +551,7 @@ function renderToday(){
         const cls=s==='skipped'?'skip':s?'on':'';
         return `<div class="day t-${d.type} ${i===UI.sel?'sel':''} ${i===tDow&&!notStarted?'today':''}" role="button" tabindex="0" data-sel="${i}">
           <div class="dn">${DOW[i]}<small>${fmtDate(dd)}</small></div>
-          <div class="what"><span class="chip">${k===RACE&&d.type==='run'?'Race day':d.title}</span><span>${esc(d.type==='run'?sessionTitle(d.run):d.type==='rest'?d.detail.split(/[,.]/)[0]:d.type==='cross'?['20–30','30–40','40–50'][wk.ph]+' min low-impact cardio':'Runner strength circuit')}</span></div>
+          <div class="what"><span class="chip">${k===RACE&&d.type==='run'?'Race day':d.title}</span><span>${esc(d.type==='run'?timeLabel(d.run):d.type==='rest'?d.detail.split(/[,.]/)[0]:d.type==='cross'?['20–30','30–40','40–50'][wk.ph]+' min low-impact cardio':'Runner strength circuit')}</span></div>
           ${d.type==='rest'?'<span></span>':own?`<button class="check ${cls}" data-done="${k}" aria-label="${s?DOW[i]+' logged as '+s+'; tap to clear':'Mark '+DOW[i]+' done'}">${mark}</button>`:`<span class="check ${cls}" aria-label="${s||'Not logged'}">${mark}</span>`}</div>`}).join('')}</div>
     </div>
     <section class="card">
@@ -646,18 +665,17 @@ function renderPlan(){
   const weekMon={};for(let cw=0;cw<80;cw++){const w=progWeekR(r,cw);if(w>=TOTAL)break;if(weekMon[w]==null)weekMon[w]=addDays(startMonR(r),cw*7)}
   view.innerHTML=`<div class="stack" style="gap:20px">
     ${whoBar()}
-    <p class="muted" style="max-width:65ch">${viewing()?esc(nameOf(UI.who))+': ':''}${r.runDays} runs a week on ${runDow.join(', ')}. ${S0.cross.length?'Cross-training on '+nm(S0.cross)+', s':'S'}trength on ${nm(S0.strength)}. Times are per session, including warm-up and cool-down walks. Race week is fixed for everyone: runs on Tue${r.runDays===3?', Thu':''} and the race on Saturday.</p>
+    <p class="muted" style="max-width:65ch">${viewing()?esc(nameOf(UI.who))+': ':''}${r.runDays} runs a week on ${runDow.join(', ')}. ${S0.cross.length?'Cross-training on '+nm(S0.cross)+', s':'S'}trength on ${nm(S0.strength)}. Each run shows running time, then total time including the warm-up and cool-down walks. Race week is fixed for everyone: runs on Tue${r.runDays===3?', Thu':''} and the race on Saturday.</p>
     ${PHASES.map((p,pi)=>{
       if(STARTS[pi]+p.weeks<=STARTS[r.entry]) return `<section class="phase"><header><h2 class="muted">${p.name}</h2><span class="muted" style="font-size:.88rem">Skipped: starting at ${PHASES[r.entry].name}</span></header></section>`;
       const here=focus>=STARTS[pi]&&focus<STARTS[pi]+p.weeks, done=focus>=STARTS[pi]+p.weeks;
       let rows='';
       for(let w=STARTS[pi];w<STARTS[pi]+p.weeks;w++){
         const wk=weekInfo(w), rs=pickRuns(wk.runs,r.runDays), m=weekMon[w], runDow=w===TOTAL-1?(r.runDays===3?['Tue','Thu','Sat']:['Tue','Sat']):runDowBase;
-        const mins=pi===0?rs.map(x=>Math.round(fullSegs(x).reduce((a,s)=>a+s[1],0)/60)):[], lo=Math.min(...mins), hi=Math.max(...mins);
-        const tot=pi===0?(lo===hi?`${lo} min each`:`${lo}–${hi} min each`):`Week total ${fmtD(rs.reduce((a,x)=>a+x.mi,0))}`;
+        const tot=pi===0?`Week: ${+(rs.reduce((a,x)=>a+runSeconds(x.seg),0)/60).toFixed(1)} min running`:`Week: ${fmtD(rs.reduce((a,x)=>a+x.mi,0))}`;
         rows+=`<div class="wrow ${w<cur?'past':''} ${w===cur?'cur':''}">
           <div class="wk">Wk ${wk.wip}<small>${m?fmtDate(m):'#'+(w+1)}${w===cur?' · now':''}</small></div>
-          <div class="runs">${rs.map((x,i)=>`<span class="${i===rs.length-1?'key':''}" title="${esc(x.kind==='interval'?describeIntervals(x.seg):runTitle(x))}"><b>${runDow[i]}</b> ${esc(pi===0?(x.seg.length===1?`${runSeconds(x.seg)/60} min run`:`${Math.round(fullSegs(x).reduce((a,s)=>a+s[1],0)/60)} min run/walk`):runShort(x))}</span>`).join('')}</div>
+          <div class="runs">${rs.map((x,i)=>`<span class="${i===rs.length-1?'key':''}" title="${esc(x.kind==='interval'?describeIntervals(x.seg):runTitle(x))}"><b>${runDow[i]}</b> ${esc(timeLabel(x))}</span>`).join('')}</div>
           <div class="tot">${tot}</div>
           ${wk.note?`<div class="note">${wk.note}</div>`:''}
           ${pi===0&&w===cur?`<div class="note">${rs.map((x,i)=>`${runDow[i]}: ${esc(describeIntervals(x.seg))}`).join('<br>')}</div>`:''}
