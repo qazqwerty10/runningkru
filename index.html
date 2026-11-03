@@ -242,6 +242,28 @@ details.phase[open]>summary{margin-bottom:8px}
 .srow .seg button.s-run[aria-pressed="true"]{background:var(--run);border-color:var(--run);color:var(--on-accent)}
 .srow .seg button.s-cross[aria-pressed="true"]{background:var(--cross);border-color:var(--cross);color:var(--on-accent)}
 .srow .seg button.s-strength[aria-pressed="true"]{background:var(--strength);border-color:var(--strength);color:var(--on-accent)}
+.est{font-size:.9rem;margin:0;color:var(--ink)}
+.hint{font-size:.84rem;margin:0;color:var(--muted);border-left:3px solid var(--line);padding-left:10px}
+.adjust,.actuals{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:12px}
+.ex-in{display:flex;flex-wrap:wrap;gap:10px}
+.ex-in label{display:flex;flex-direction:column;gap:3px;flex:1 1 120px;min-width:0}
+.ex-in input,.field input[type=number],.ex-sub select,#f-pace{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);width:100%;min-width:0}
+.ex-in small,.ex-sub small,.ex-sets small{color:var(--muted);font-size:.76rem;font-weight:600}
+.ex-sets{display:flex;flex-direction:column;gap:3px;flex:1 1 150px}
+.ex-sets .rts{grid-template-columns:repeat(4,minmax(30px,1fr))}
+.linkbtn{border:0;background:none;padding:0;color:var(--run);font:inherit;font-weight:600;text-decoration:underline;cursor:pointer}
+.strength{display:flex;flex-direction:column;gap:12px}
+.sblock{display:flex;flex-direction:column;gap:10px;border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.sb-h{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.sb-h b{font-family:var(--f-display);text-transform:uppercase;font-size:1.05rem;letter-spacing:.02em}
+.sb-h .muted{font-family:var(--f-mono);font-size:.78rem}
+.exr{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px dashed var(--line)}
+.sblock .exr:first-of-type{border-top:0;padding-top:0}
+.ex-n{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.ex-n small{font-family:var(--f-mono);color:var(--muted)}
+.ex-sub{display:flex;flex-direction:column;gap:3px;max-width:320px}
+.ex-last{font-size:.8rem;color:var(--muted)}
+.ex-last.ready{color:var(--ok);font-weight:600}
 @media (max-width:640px){
   .tabs{position:fixed;left:0;right:0;bottom:0;z-index:40;border-radius:0;border-width:1px 0 0;justify-content:space-around;
     padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px))}

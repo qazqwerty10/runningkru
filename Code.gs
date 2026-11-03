@@ -1,5 +1,5 @@
 /**
- * Couch to 10 Miles — Google Sheet backend (v2: profile keys + private pain ratings).
+ * Couch to 10 Miles — Google Sheet backend (v3: profile keys, private pain ratings, merged edits).
  *
  * Install / update:
  *   1. Extensions → Apps Script. Replace everything in Code.gs with this file. Save.
@@ -18,6 +18,9 @@
  * Privacy model: anyone with the /exec URL can read the shared data (names, plans,
  * completion, effort). Pain ratings are returned only to the phone holding that
  * person's key. Saving or deleting a profile requires its key.
+ *
+ * Edits arrive as small patches ({logs:{"2026-11-10":{rpe:4}}}) and are merged into the stored
+ * record field by field, so two phones using the same profile don't overwrite each other.
  */
 
 const RUNNERS = 'Runners';
@@ -27,7 +30,7 @@ const PRIVATE_FIELDS = ['pain', 'morning'];
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (p.action === 'ping') return json_({ ok: true, version: 2 });
+  if (p.action === 'ping') return json_({ ok: true, version: 3 });
   return json_(snapshot_(null, null));
 }
 
@@ -73,6 +76,22 @@ function doPost(e) {
       return json_(snapshot_(id, token));
     }
 
+    if (body.action === 'patch') {
+      if (!row) return json_({ ok: false, code: 'not_found', error: 'That runner no longer exists.' });
+      if (!storedHash) return json_({ ok: false, code: 'forbidden', error: 'Link this phone to the profile first.' });
+      if (!Array.isArray(body.patches)) return json_({ ok: false, code: 'bad_request', error: 'Missing edits' });
+      let pub = {}, priv = {};
+      try { pub = JSON.parse(row[3]); } catch (err) { pub = {}; }
+      try { if (row[4]) priv = JSON.parse(row[4]); } catch (err) { priv = {}; }
+      const full = pub; mergePrivate_(full, priv);
+      body.patches.forEach(function (p) { if (p && typeof p === 'object') deepMerge_(full, p); });
+      const split = split_(full);
+      split.pub.updatedAt = new Date().toISOString();
+      sh.getRange(at, 1, 1, 6).setValues([[id, String(split.pub.name || ''), split.pub.updatedAt, JSON.stringify(split.pub), JSON.stringify(split.priv), storedHash]]);
+      rebuildWorkouts_();
+      return json_(snapshot_(id, token));
+    }
+
     if (body.action === 'delete') {
       if (at > 0) sh.deleteRow(at);
       rebuildWorkouts_();
@@ -100,7 +119,7 @@ function snapshot_(id, token) {
     }
     runners[r.id] = pub;
   });
-  return { ok: true, version: 2, runners: runners, authed: authed };
+  return { ok: true, version: 3, runners: runners, authed: authed };
 }
 
 function split_(runner) {
@@ -118,6 +137,19 @@ function split_(runner) {
     });
   });
   return { pub: pub, priv: priv };
+}
+
+// Objects merge key by key; arrays and plain values replace. null is kept (it clears a field).
+function deepMerge_(target, patch) {
+  Object.keys(patch).forEach(function (k) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') return;
+    const v = patch[k];
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      if (!target[k] || typeof target[k] !== 'object' || Array.isArray(target[k])) target[k] = {};
+      deepMerge_(target[k], v);
+    } else target[k] = v;
+  });
+  return target;
 }
 
 function mergePrivate_(pub, priv) {
@@ -169,7 +201,7 @@ function findRow_(sh, id) {
 }
 
 function rebuildWorkouts_() {
-  const header = ['runner', 'date', 'status', 'effort (RPE)', 'pain during', 'pain next morning', 'note'];
+  const header = ['runner', 'date', 'status', 'planned', 'distance (mi)', 'running time (min)', 'effort (RPE)', 'pain during', 'pain next morning', 'strength', 'note'];
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sh = ss.getSheetByName(WORKOUTS);
   if (!sh) sh = ss.insertSheet(WORKOUTS);
@@ -184,9 +216,10 @@ function rebuildWorkouts_() {
     Object.keys(dates).forEach(function (date) {
       const L = logs[date] || {}, P = r.priv[date] || {};
       const status = L.status || (L.done ? 'done' : '');
-      if (!status && L.rpe == null && P.pain == null && P.morning == null) return;
+      if (!status && L.rpe == null && P.pain == null && P.morning == null && !L.ex) return;
       const v = function (x) { return x == null ? '' : x; };
-      rows.push([r.pub.name || r.id, date, status, v(L.rpe), v(P.pain), v(P.morning), L.note || '']);
+      const ex = L.ex ? Object.keys(L.ex).map(function (k) { const e = L.ex[k] || {}; return k + ' ' + (e.w != null ? e.w + '×' : '') + (e.r != null ? e.r : '') + (e.s != null ? ' (' + e.s + ' sets)' : ''); }).join('; ') : '';
+      rows.push([r.pub.name || r.id, date, status, (L.planned && L.planned.title) || '', L.dist != null ? Math.round(L.dist * 100) / 100 : '', L.dur != null ? Math.round(L.dur / 6) / 10 : '', v(L.rpe), v(P.pain), v(P.morning), ex, L.note || '']);
     });
   });
   rows.sort(function (a, b) { return a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : String(a[0]).localeCompare(String(b[0])); });

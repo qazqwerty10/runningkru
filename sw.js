@@ -1,7 +1,7 @@
 // Offline support: keeps a copy of the app's own files so it opens without internet.
 // App files are fetched fresh when online (network first) and fall back to the saved copy.
 // Requests to Google's script are never cached here; the app keeps its own copy of the plan.
-const CACHE='c10-app-v5';
+const CACHE='c10-app-v6';
 const FILES=['./','./index.html','./app.js','./config.js','./manifest.webmanifest','./icon.svg','./icon-180.png'];
 
 self.addEventListener('install',e=>{
