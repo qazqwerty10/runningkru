@@ -189,6 +189,55 @@ input[type=date]{font:inherit;padding:8px 10px;border:1px solid var(--line);bord
 .join input[type=text]{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);max-width:320px}
 .banner{font-size:.86rem;padding:10px 14px;border-radius:10px;background:var(--strength-soft);color:var(--ink)}
 .ro{font-size:.86rem;color:var(--muted)}
+.banner.err{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:color-mix(in srgb,var(--bad) 14%,var(--surface))}
+.banner.err>div{min-width:0;flex:1 1 240px}
+/* v3 layout */
+.stack{display:flex;flex-direction:column;gap:18px}
+.where{font-size:.84rem;font-weight:600;color:var(--muted);margin:0}
+.session .sub{font-size:1.02rem;color:var(--ink);opacity:.85}
+.btn.big{padding:14px 26px;font-size:1.05rem;border-radius:11px}
+.meta b.word{font-family:var(--f-body);font-weight:600;font-size:.92rem;max-width:22ch}
+details.more summary{cursor:pointer;font-weight:600;font-size:.88rem;color:var(--run)}
+details.more p{margin-top:6px;font-size:.9rem}
+.status-seg button{flex:1 1 auto}
+.field .eyebrow{margin-bottom:2px}
+.field input[type=text]{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);max-width:100%}
+.logs{grid-template-columns:1fr}
+.rate{display:flex;flex-direction:column;gap:6px}
+.rate-h{display:flex;justify-content:space-between;gap:8px;font-size:.86rem;font-weight:600}
+.rate-h .need{color:var(--warn)}
+.rts{display:grid;grid-template-columns:repeat(auto-fit,minmax(30px,1fr));gap:4px}
+.rt{border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:7px 0;font-family:var(--f-mono);font-size:.85rem;color:var(--ink)}
+.rt[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.rt.g[aria-pressed="true"]{background:var(--ok);border-color:var(--ok);color:var(--on-accent)}
+.rt.a[aria-pressed="true"]{background:var(--warn);border-color:var(--warn);color:var(--on-accent)}
+.rt.r[aria-pressed="true"]{background:var(--bad);border-color:var(--bad);color:var(--on-accent)}
+.check.skip{border-style:dashed;color:var(--muted);font-weight:700}
+.sq span.skip{border-style:dashed;color:var(--ink)}
+.counts{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.88rem}
+.counts b{font-family:var(--f-mono);font-weight:500}
+.ms{font-size:.84rem;font-weight:600;color:var(--cross)}
+.tl-h{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.rc-h{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}
+details.phase>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:4px 0}
+details.phase>summary::-webkit-details-marker{display:none}
+details.phase>summary::before{content:"";width:9px;height:9px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(-45deg);flex:none;transition:transform .15s}
+details.phase[open]>summary::before{transform:rotate(45deg)}
+details.phase>summary .ph-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+details.phase[open]>summary{margin-bottom:8px}
+.runs span b{font-weight:700;margin-right:3px}
+.tabs button{display:inline-flex;align-items:center;gap:6px}
+.tabs svg{width:17px;height:17px;flex:none}
+.tabs .gear span{display:none}
+@media (max-width:640px){
+  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:40;border-radius:0;border-width:1px 0 0;justify-content:space-around;
+    padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px))}
+  .tabs button{flex-direction:column;gap:2px;font-size:.7rem;padding:6px 4px;flex:1 1 0;min-width:0}
+  .tabs svg{width:22px;height:22px}
+  .tabs .gear{flex:0 0 52px}
+  .app{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}
+  .actions .btn.big{flex:1 1 100%}
+}
 @media (prefers-reduced-motion:no-preference){.lane .bar i{transition:width .4s ease}}
 @media (max-width:420px){.day{grid-template-columns:44px 1fr auto;gap:10px;padding:10px 12px}.wrow{grid-template-columns:52px 1fr}.wrow .tot{grid-column:2;text-align:left}}
 </style>
@@ -201,12 +250,12 @@ input[type=date]{font:inherit;padding:8px 10px;border:1px solid var(--line);bord
       <div class="eyebrow">Road to May 15 · 10 miles · <span class="sync" id="sync" data-state="idle">Connecting…</span></div>
       <h1>Couch to 10 Miles</h1>
     </div>
-    <nav class="tabs" role="tablist">
-      <button role="tab" data-tab="today" id="tab-today">Today</button>
-      <button role="tab" data-tab="crew" id="tab-crew">Crew</button>
-      <button role="tab" data-tab="plan" id="tab-plan">Plan</button>
-      <button role="tab" data-tab="guide" id="tab-guide">Guide</button>
-      <button role="tab" data-tab="setup" id="tab-setup">Setup</button>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button role="tab" data-tab="today" id="tab-today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Today</span></button>
+      <button role="tab" data-tab="plan" id="tab-plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg><span>Plan</span></button>
+      <button role="tab" data-tab="crew" id="tab-crew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><circle cx="17" cy="9.5" r="2.5"/><path d="M3 19c.6-3.3 3-5 6-5s5.4 1.7 6 5M15 14.6c2.6-.3 4.6 1.2 5.2 4.4"/></svg><span>Crew</span></button>
+      <button role="tab" data-tab="guide" id="tab-guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h9a4 4 0 0 1 4 4v12H9a4 4 0 0 1-4-4z"/><path d="M9 9h5M9 13h5"/></svg><span>Guide</span></button>
+      <button role="tab" data-tab="setup" id="tab-setup" class="gear" aria-label="Setup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Setup</span></button>
     </nav>
   </header>
   <main id="view"></main>

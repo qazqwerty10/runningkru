@@ -110,26 +110,6 @@ function scheduleDiff(r){
   const endMon=addDays(startMonR(r),(TOTAL-1-STARTS[r.entry]+(r.holds||[]).length)*7);
   return Math.round((dayNum(endMon)-dayNum(RACE_MON))/7);
 }
-function schedulePill(r){
-  const d=scheduleDiff(r);
-  if(d===0) return {c:'g',t:'On schedule for May 15'};
-  if(d<0) return {c:'g',t:`${-d} wk buffer before race`};
-  return {c:'a',t:`${d} wk behind race day`};
-}
-function weekStatus(r,mon,days){
-  const logs=r.logs||{};
-  let worst=-1,rpeMax=0,logged=0;
-  days.forEach((d,i)=>{if(d.type!=='run')return;const L=logs[iso(addDays(mon,i))];if(!L||!L.done)return;logged++;
-    worst=Math.max(worst,L.pain??0,L.morning??0);rpeMax=Math.max(rpeMax,L.rpe??0)});
-  if(!logged) return {c:'',t:'No runs logged yet this week',d:r.mode==='rtr'?'Log pain during each run and again the next morning.':'Log effort after each run.'};
-  if(r.mode==='rtr'){
-    if(worst>=5) return {c:'r',t:'Red: step back',d:'Pain reached 5/10 or higher. Stop running this week, drop back one week, and get it assessed if it persists.'};
-    if(worst>=3) return {c:'a',t:'Amber: repeat this week',d:'Pain of 3–4/10 is acceptable if it settles within 24 hours, but hold here rather than progressing.'};
-    return {c:'g',t:'Green: on track',d:'Pain 0–2/10 and not worse the next morning. Progress as planned.'};
-  }
-  if(rpeMax>=8) return {c:'a',t:'Hard week: consider repeating',d:'At least one run felt RPE 8 or higher. Repeating a week is normal; check the race-day buffer before you do.'};
-  return {c:'g',t:'On track',d:'Runs felt manageable. Progress as planned.'};
-}
 function runnerNow(r){
   const t=today(), cw=calWeekR(r,t), notStarted=cw<0;
   const pw=notStarted?STARTS[r.entry]:progWeekR(r,cw);
@@ -139,7 +119,7 @@ function runnerNow(r){
 
 /* ---------- shared state (Google Sheet via Apps Script) ---------- */
 const API=(window.C10_API||'').trim();
-let ME=null, RUNNERS={}, LOADED=false, LOCAL=false, ERR='', SYNC='idle', LASTSYNC=null;
+let ME=null, RUNNERS={}, LOADED=false, LOCAL=false, ERR='', LASTSYNC=null;
 let UI={tab:store.get('c10-tab','today'),sel:null,who:null,join:{name:'',entry:0,runDays:3},confirmLeave:false,newRunner:false};
 const mine=()=>RUNNERS[ME]||null;
 const viewing=()=>RUNNERS[UI.who]||null;
@@ -154,48 +134,88 @@ const newId=()=>Array.from(crypto.getRandomValues(new Uint8Array(8)),b=>(b%36).t
 function deepMerge(t,p){for(const k in p){if(p[k]&&typeof p[k]==='object'&&!Array.isArray(p[k])){t[k]=deepMerge(t[k]&&typeof t[k]==='object'?{...t[k]}:{},p[k])}else t[k]=p[k]}return t}
 
 /* network */
-async function apiGet(){
-  const res=await fetch(API+(API.includes('?')?'&':'?')+'action=all&t='+Date.now(),{redirect:'follow'});
-  const j=await res.json(); if(!j.ok) throw new Error(j.error||'Load failed'); return j.runners||{};
+const TIMEOUT_MS=15000;
+class SyncError extends Error{constructor(msg,kind){super(msg);this.kind=kind}}
+async function call(url,opts){
+  const ctl=new AbortController(), t=setTimeout(()=>ctl.abort(),TIMEOUT_MS);
+  let res, text;
+  try{res=await fetch(url,{...opts,redirect:'follow',signal:ctl.signal});text=await res.text()}
+  catch(e){
+    if(e&&e.name==='AbortError') throw new SyncError('The crew sheet took longer than 15 seconds to answer. Google is probably slow right now.','timeout');
+    if(!navigator.onLine) throw new SyncError("This phone is offline. Changes stay here and upload when you're back online.",'offline');
+    throw new SyncError("Couldn't reach Google. This is usually a brief network problem.",'network');
+  }finally{clearTimeout(t)}
+  if(!res.ok) throw new SyncError(`Google returned an error (HTTP ${res.status}). Try again in a minute.`,'http');
+  let j;
+  try{j=JSON.parse(text)}catch(e){
+    if(/accounts\.google\.com|ServiceLogin|Sign in/i.test(text)) throw new SyncError('Google asked for a sign-in. In Apps Script, set "Who has access" to Anyone and deploy a new version.','auth');
+    if(/Script function not found/i.test(text)) throw new SyncError('The Google script is missing doGet/doPost. Paste Code.gs again, save, and deploy a new version.','script');
+    throw new SyncError('The Google script sent back a web page instead of data. Check that it is deployed as a Web app.','badresponse');
+  }
+  if(!j||!j.ok) throw new SyncError('The sheet script reported: '+((j&&j.error)||'unknown error'),'script');
+  return j.runners||{};
 }
-async function apiPost(body){
-  // text/plain keeps this a "simple" request, which Apps Script accepts without a CORS preflight
-  const res=await fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body),redirect:'follow'});
-  const j=await res.json(); if(!j.ok) throw new Error(j.error||'Save failed'); return j.runners||{};
-}
-let dirty=false, pushTimer=null, pushing=null;
-function applyServer(runners){
-  const keep=dirty&&RUNNERS[ME]?RUNNERS[ME]:null;
-  RUNNERS=runners; if(keep) RUNNERS[ME]=keep;
-  if(ME&&!RUNNERS[ME]&&!keep){ME=null;store.set('c10-me',null)}
-  LOADED=true; LASTSYNC=new Date();
+const apiGet=()=>call(API+(API.includes('?')?'&':'?')+'action=all&t='+Date.now(),{});
+// text/plain keeps this a "simple" request, which Apps Script accepts without a CORS preflight
+const apiPost=body=>call(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)});
+
+/* Unsent edits are kept as a queue of small patches on top of the last copy the sheet confirmed.
+   A patch leaves the queue only once a save that included it is acknowledged, so a reopened
+   phone replays just the edits that never reached the sheet, never an old full copy. */
+let SERVER={}, QUEUE=[], REV=0, inflight=false, pushTimer=null, retryTimer=null, retryDelay=15000;
+let LOADERR=null, SAVEERR=null;
+const persistQueue=()=>store.set('c10-queue',{id:ME,rev:REV,patches:QUEUE});
+const clone=o=>JSON.parse(JSON.stringify(o));
+function rebuild(){
+  RUNNERS={...SERVER};
+  if(ME&&QUEUE.length){let r=SERVER[ME]?clone(SERVER[ME]):null;if(r){QUEUE.forEach(q=>{r=deepMerge(r,q.p)});RUNNERS[ME]=r}}
+  if(ME&&!RUNNERS[ME]&&LOADED&&!QUEUE.length){ME=null;store.set('c10-me',null)}
   if(mine())UNITS=mine().units||'mi';
   if(!UI.who||!RUNNERS[UI.who]) UI.who=mine()?ME:(orderedIds()[0]||null);
 }
+function applyServer(runners){SERVER=runners;LOADED=true;LASTSYNC=new Date();LOADERR=null;rebuild()}
 async function refresh(){
   if(LOCAL||!API||document.hidden) return;
-  try{const r=await apiGet();applyServer(r);if(SYNC==='offline')SYNC='idle';if(ERR&&/load|connect/i.test(ERR))ERR='';render()}
-  catch(e){if(!LOADED){ERR='Could not load the crew. Check your connection, then reload.';LOADED=true}SYNC='offline';render()}
+  try{applyServer(await apiGet())}
+  catch(e){LOADERR=e.message||String(e);if(!LOADED)LOADED=true}
+  render();
 }
-function schedulePush(){clearTimeout(pushTimer);pushTimer=setTimeout(push,700)}
+function schedulePush(ms){clearTimeout(pushTimer);pushTimer=setTimeout(push,ms==null?700:ms)}
 async function push(){
-  if(pushing){await pushing;}
-  if(!dirty||!mine()) return;
-  dirty=false; SYNC='saving'; paintSync();
-  const body={action:'save',id:ME,runner:mine()};
-  pushing=apiPost(body).then(r=>{applyServer(r);SYNC='saved';ERR=''}).catch(()=>{dirty=true;SYNC='offline';ERR='Not saved yet: no connection to the crew sheet. Your changes are kept on this phone and will retry.';setTimeout(()=>{if(dirty)push()},15000)}).finally(()=>{pushing=null;render()});
-  await pushing;
+  if(inflight||!QUEUE.length||!mine()||!SERVER[ME]) return;
+  inflight=true; clearTimeout(retryTimer); paintSync();
+  const sentRev=QUEUE[QUEUE.length-1].rev, runner=clone(mine());
+  try{
+    const all=await apiPost({action:'save',id:ME,runner});
+    QUEUE=QUEUE.filter(q=>q.rev>sentRev); persistQueue();
+    SAVEERR=null; retryDelay=15000; applyServer(all);
+  }catch(e){
+    SAVEERR=e.message||String(e);
+    retryTimer=setTimeout(push,retryDelay); retryDelay=Math.min(retryDelay*2,120000);
+  }finally{inflight=false}
+  render();
+  if(QUEUE.length&&!SAVEERR) schedulePush(200);
 }
+function retryNow(){SAVEERR=null;LOADERR=null;retryDelay=15000;render();if(QUEUE.length)push();refresh()}
 function saveMine(patch){
   if(!mine())return;
-  RUNNERS[ME]=deepMerge(JSON.parse(JSON.stringify(mine())),patch);
-  if(LOCAL){store.set('c10-local',RUNNERS[ME]);render();return}
-  store.set('c10-pending',{id:ME,runner:RUNNERS[ME]});
-  dirty=true; render(); schedulePush();
+  if(LOCAL){RUNNERS[ME]=deepMerge(clone(mine()),patch);store.set('c10-local',RUNNERS[ME]);render();return}
+  QUEUE.push({rev:++REV,p:patch}); persistQueue(); rebuild(); render(); schedulePush();
+}
+const plural=(n,w)=>`${n} ${w}${n===1?'':'s'}`;
+function syncState(){
+  if(LOCAL) return {s:'local',t:'This device only'};
+  if(!LOADED) return {s:'idle',t:'Connecting…'};
+  if(inflight) return {s:'saving',t:'Saving…'};
+  if(QUEUE.length&&SAVEERR) return {s:'offline',t:plural(QUEUE.length,'change')+' waiting to upload'};
+  if(QUEUE.length) return {s:'saving',t:'Saving…'};
+  if(LOADERR&&!LASTSYNC) return {s:'offline',t:'Not connected'};
+  if(LOADERR) return {s:'offline',t:'Connection lost'};
+  return {s:'idle',t:mine()?'All changes saved':'Connected'};
 }
 function paintSync(){const el=document.getElementById('sync');if(!el)return;
-  el.textContent=LOCAL?'This device only':SYNC==='saving'?'Saving…':SYNC==='offline'?'Offline · will retry':LASTSYNC?'Synced '+LASTSYNC.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):'Connecting…';
-  el.dataset.state=LOCAL?'local':SYNC;}
+  const st=syncState(); el.textContent=st.t; el.dataset.state=st.s;
+  el.title=LASTSYNC?'Last synced '+LASTSYNC.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'';}
 
 function goLocal(){
   LOCAL=true;ME='local';
@@ -207,14 +227,17 @@ function goLocal(){
 async function boot(){
   if(!API){goLocal();return}
   ME=store.get('c10-me',null);
-  const pend=store.get('c10-pending',null);
+  store.set('c10-pending',null); // old full-copy format: replaying it could overwrite newer data
+  const q=store.get('c10-queue',null);
+  if(q&&q.id===ME&&Array.isArray(q.patches)){QUEUE=q.patches;REV=q.rev||0}
   render();
   await refresh();
-  if(pend&&pend.id===ME&&ME){RUNNERS[ME]=deepMerge(JSON.parse(JSON.stringify(RUNNERS[ME]||{})),pend.runner);dirty=true;push()}
   if(!mine()&&UI.tab==='today') UI.tab='crew';
   render();
+  if(QUEUE.length) push();
   setInterval(refresh,60000);
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden){refresh();if(QUEUE.length)push()}});
+  window.addEventListener('online',retryNow);
 }
 
 /* ---------- render ---------- */
@@ -225,6 +248,7 @@ const CHECK='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-w
 function render(){
   document.querySelectorAll('.tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===UI.tab));
   ({today:renderToday,crew:renderCrew,plan:renderPlan,guide:renderGuide,setup:renderSetup})[UI.tab]();
+  const rb=document.getElementById('retrySync'); if(rb) rb.onclick=retryNow;
   paintSync();
 }
 
@@ -237,6 +261,8 @@ function ladder(pw){
 function banners(){
   let h='';
   if(LOCAL) h+=`<div class="banner">Saving on this device only. The crew sheet isn't connected yet (see README step 2).</div>`;
+  const e=SAVEERR||LOADERR;
+  if(!LOCAL&&e&&(QUEUE.length||LOADERR)) h+=`<div class="banner err" role="alert"><div><b>${QUEUE.length?plural(QUEUE.length,'change')+' waiting to upload.':"Can't load the latest crew data."}</b> ${esc(e)}${QUEUE.length?' Your changes are safe on this phone.':''}</div><button class="btn small" id="retrySync" type="button">Retry now</button></div>`;
   if(ERR) h+=`<div class="banner" role="alert">${esc(ERR)}</div>`;
   return h;
 }
@@ -278,68 +304,139 @@ function bindJoin(){
     const id=newId(), r=newRunner(nm,UI.join.entry,UI.join.runDays,'std');
     const btn=document.getElementById('joinBtn');btn.disabled=true;btn.textContent='Joining…';
     try{const all=await apiPost({action:'save',id,runner:r});ME=id;store.set('c10-me',ME);applyServer(all);UI.who=ME;UI.tab='today';UI.sel=null;UI.newRunner=false;ERR=''}
-    catch(e){ERR='Could not join just now. Check your connection and try again.'}
+    catch(e){ERR='Could not join. '+(e.message||'Try again in a moment.')}
     render();
   };
+}
+
+/* ---------- log helpers ---------- */
+const statusOf=L=>L&&(L.status||(L.done?'done':null))||null;
+const isDone=L=>{const s=statusOf(L);return s==='done'||s==='modified'};
+const fmtMin=s=>{const m=s/60, w=Math.floor(m), f=m-w;return (f===0.5?(w?w+'½':'½'):(+m.toFixed(1)))+' min'};
+function describeIntervals(seg){
+  const runs=seg.filter(s=>s[0]==='run');
+  if(runs.length===1&&seg.length===1) return `Run ${fmtMin(seg[0][1]).replace(' min',' minutes')} without stopping`;
+  const same=(a,b)=>a[0]===b[0]&&a[1]===b[1];
+  for(let p=2;p<=seg.length/2;p+=2){
+    let ok=true;for(let i=0;i<seg.length;i++){if(!same(seg[i],seg[i%p])){ok=false;break}}
+    const full=seg.length%p===0, dropped=(seg.length+1)%p===0&&seg[seg.length-1][0]==='run';
+    if(ok&&(full||dropped)){
+      const rounds=Math.ceil(seg.length/p), parts=seg.slice(0,p).map(s=>`${s[0]} ${fmtMin(s[1])}`).join(', ');
+      return `${rounds} rounds: ${parts}${dropped?' (no walk after the last run)':''}`;
+    }
+  }
+  const t=seg.map(s=>`${s[0]} ${fmtMin(s[1])}`).join(', ');return t.charAt(0).toUpperCase()+t.slice(1);
+}
+function sessionTitle(r){
+  if(r.kind!=='interval') return runTitle(r);
+  const tot=Math.round(fullSegs(r).reduce((a,s)=>a+s[1],0)/60), run=runSeconds(r.seg)/60;
+  return r.seg.length===1?`${run}-minute continuous run`:`${tot}-minute run/walk`;
+}
+const EFFORT={easy:'Easy: you can speak in full sentences',goal:'Steady: start easy, finish strong',interval:'Easy jog: you can talk in short sentences'};
+function ratingRow(k,label,min,max,val,hint){
+  let b='';for(let v=min;v<=max;v++){const z=k==='rpe'?'':v<=2?'g':v<=4?'a':'r';b+=`<button type="button" class="rt ${z}" data-rate="${k}" data-v="${v}" aria-pressed="${val===v}">${v}</button>`}
+  return `<div class="rate"><div class="rate-h"><span>${label}</span><span class="${val==null?'need':''}">${val==null?'Not entered':val+'/10'}</span></div><div class="rts" role="group" aria-label="${label}">${b}</div>${hint?`<small class="muted">${hint}</small>`:''}</div>`;
+}
+
+function schedulePill(r){
+  const d=scheduleDiff(r);
+  if(d===0) return {c:'g',t:'Plan ends on race day'};
+  if(d<0) return {c:'g',t:`Plan ends ${-d} wk before race`};
+  return {c:'a',t:`Plan ends ${d} wk after race`};
+}
+function weekStatus(r,mon,days){
+  const logs=r.logs||{}, t=today();
+  const runs=[];days.forEach((d,i)=>{if(d.type!=='run')return;const dt=addDays(mon,i),L=logs[iso(dt)];runs.push({i,dt,L})});
+  const done=runs.filter(x=>isDone(x.L)), skipped=runs.filter(x=>statusOf(x.L)==='skipped');
+  const skipNote=skipped.length?` ${plural(skipped.length,'run')} skipped.`:'';
+  if(!done.length) return {c:'',t:skipped.length?'No runs completed yet':'No runs logged yet this week',d:(r.mode==='rtr'?'Log pain during each run and again the next morning.':'Log effort after each run.')+skipNote};
+  if(r.mode==='rtr'){
+    const vals=[];const missing=[];let pendingMorning=false;
+    done.forEach(x=>{const L=x.L;
+      if(L.pain!=null)vals.push(L.pain);else missing.push(`${DOW[x.i]} during`);
+      if(L.morning!=null)vals.push(L.morning);else if(dayNum(x.dt)<dayNum(t))missing.push(`${DOW[x.i]} next morning`);else pendingMorning=true;});
+    const worst=vals.length?Math.max(...vals):null;
+    if(worst!=null&&worst>=5) return {c:'r',t:'Red: step back',d:'Pain reached 5/10 or higher. Stop running this week, drop back one week, and get it assessed if it persists.'};
+    if(missing.length) return {c:'',t:'Check-in incomplete',d:`Add pain ratings for: ${missing.join(', ')}. The traffic light needs both ratings for every completed run.`+skipNote};
+    const later=pendingMorning?" Tomorrow morning's rating can still change this.":'';
+    if(worst>=3) return {c:'a',t:'Amber: repeat this week',d:'Pain of 3–4/10 is acceptable if it settles within 24 hours, but hold here rather than progressing.'+later+skipNote};
+    return {c:'g',t:'Green: on track',d:'Pain 0–2/10 and not worse the next morning. Progress as planned.'+later+skipNote};
+  }
+  const rp=done.map(x=>x.L.rpe).filter(v=>v!=null);
+  if(rp.length&&Math.max(...rp)>=8) return {c:'a',t:'Hard week: consider repeating',d:'At least one run felt very hard (RPE 8+). Repeating a week is normal; check the race-day buffer before you do.'+skipNote};
+  const noEff=done.length-rp.length;
+  return {c:'g',t:'On track',d:(rp.length?'Runs felt manageable. Progress as planned.':'Runs completed. Progress as planned.')+(noEff?` Effort not entered for ${plural(noEff,'run')}.`:'')+skipNote};
 }
 
 function renderToday(){
   if(!LOADED){view.innerHTML=`<p class="muted">Loading the crew…</p>`;return}
   const r=viewing();
-  if(!r){view.innerHTML=`<div style="display:flex;flex-direction:column;gap:18px">${banners()}${joinCard()||'<p class="muted">Nobody has joined yet.</p>'}</div>`;bindJoin();return}
+  if(!r){view.innerHTML=`<div class="stack">${banners()}${joinCard()||'<p class="muted">Nobody has joined yet.</p>'}</div>`;bindJoin();return}
   const own=isMine(), n=r.runDays, logs=r.logs||{};
   const N=runnerNow(r), {t,cw,pw,notStarted,mon}=N;
   const head=`${banners()}${!mine()?joinCard():''}${whoBar()}`;
   if(N.finished){
-    view.innerHTML=`<div style="display:flex;flex-direction:column;gap:18px">${head}${ladder(TOTAL)}<div class="card session t-run"><span class="chip">Program complete</span><h2>10 miles: done</h2><p class="muted">All 27 weeks finished. Keep 2–3 easy runs a week plus strength to hold your fitness.</p></div></div>`;
+    view.innerHTML=`<div class="stack">${head}<div class="card session t-run"><span class="chip">Program complete</span><h2>10 miles: done</h2><p class="muted">All 27 weeks finished. Keep 2–3 easy runs a week plus strength to hold your fitness.</p></div>${timeline(r,TOTAL)}</div>`;
     bindWho();bindJoin();return;
   }
   const {wk,days}=weekDays(pw,n);
   const tDow=(t.getDay()+6)%7;
   if(UI.sel===null) UI.sel=notStarted?1:tDow;
-  const day=days[UI.sel], date=addDays(mon,UI.sel), key=iso(date), L=logs[key]||{};
+  const day=days[UI.sel], date=addDays(mon,UI.sel), key=iso(date), L=logs[key]||{}, S=statusOf(L);
   const ph=PHASES[wk.ph], st=weekStatus(r,mon,days), held=(r.holds||[]).filter(h=>h===cw).length;
-  const isRace=key===RACE&&day.type==='run';
-  const sp=schedulePill(r);
+  const isRace=key===RACE&&day.type==='run', isToday=UI.sel===tDow&&!notStarted;
+  const past=dayNum(date)<dayNum(t);
 
-  let body='';
+  let title=day.title, sub=day.detail, body='', primary='';
   if(day.type==='run'){
     const ru=day.run;
+    title=sessionTitle(ru);
     if(ru.kind==='interval'){
       const segs=fullSegs(ru), tot=segs.reduce((a,s)=>a+s[1],0);
-      body+=`<div class="meta"><div><span class="eyebrow">Running</span><b>${runSeconds(ru.seg)/60} min</b></div><div><span class="eyebrow">Total session</span><b>${Math.round(tot/60)} min</b></div></div>
+      sub=describeIntervals(ru.seg)+'. Starts and ends with a 5-minute brisk walk.';
+      body=`<div class="meta"><div><span class="eyebrow">Total time</span><b>${Math.round(tot/60)} min</b></div><div><span class="eyebrow">Running</span><b>${runSeconds(ru.seg)/60} min</b></div><div><span class="eyebrow">Effort</span><b class="word">${EFFORT.interval}</b></div></div>
       <div class="segbar" aria-hidden="true">${segs.map(s=>`<span class="s-${s[0]}" style="flex:${s[1]}"></span>`).join('')}</div>
-      <div class="legend"><span><i class="s-run"></i>Run</span><span><i class="s-walk"></i>Walk</span><span><i class="s-warm"></i>Warm-up / cool-down</span></div>`;
-    } else body+=`<div class="meta"><div><span class="eyebrow">Distance</span><b>${fmtD(ru.mi)}</b></div><div><span class="eyebrow">Effort</span><b>${ru.kind==='race'||ru.kind==='goal'?'Goal':'RPE 3–4'}</b></div></div>`;
+      <div class="legend"><span><i class="s-run"></i>Run</span><span><i class="s-walk"></i>Walk</span><span><i class="s-warm"></i>Warm-up / cool-down</span></div>
+      <details class="more"><summary>How to run it</summary><p class="muted">${esc(runDetail(ru))}</p></details>`;
+      if(own) primary=`<button class="btn primary big" id="startTimer">${S?'Start workout again':'Start workout'}</button>`;
+    } else {
+      sub=runDetail(ru);
+      body=`<div class="meta"><div><span class="eyebrow">Distance</span><b>${fmtD(ru.mi)}</b></div><div><span class="eyebrow">Effort</span><b class="word">${ru.kind==='race'||ru.kind==='goal'?EFFORT.goal:EFFORT.easy}</b></div></div>`;
+    }
   }
-  const timerBtn=day.type==='run'&&day.run.kind==='interval'?`<button class="btn primary" id="startTimer">Start interval timer</button>`:'';
-  const doneBtn=own?`<button class="btn ${L.done?'done':''}" id="markDone">${L.done?'Completed':'Mark complete'}</button>`:`<span class="ro">${L.done?'Completed':'Not logged yet'}${L.rpe?` · RPE ${L.rpe}`:''}${L.pain!=null?` · pain ${L.pain}/10`:''}</span>`;
-  const logFields=own&&day.type==='run'&&L.done?`<div class="logs">
-      <label for="f-rpe">Effort (RPE) <output>${L.rpe??'–'}/10</output><input type="range" id="f-rpe" min="1" max="10" value="${L.rpe??4}" data-k="rpe"></label>
-      ${r.mode==='rtr'?`<label for="f-pain">Pain during run <output>${L.pain??0}/10</output><input type="range" id="f-pain" min="0" max="10" value="${L.pain??0}" data-k="pain"></label>
-      <label for="f-morn">Pain next morning <output>${L.morning??'–'}/10</output><input type="range" id="f-morn" min="0" max="10" value="${L.morning??0}" data-k="morning"></label>`:''}
+  const statusBtns=own&&day.type!=='rest'?`<div class="field"><span class="eyebrow">${S?'Logged as':'Log this '+(day.type==='run'?'run':'session')}</span><div class="seg status-seg">
+      <button type="button" data-st="done" aria-pressed="${S==='done'}">Done as planned</button>
+      <button type="button" data-st="modified" aria-pressed="${S==='modified'}">Done, modified</button>
+      <button type="button" data-st="skipped" aria-pressed="${S==='skipped'}">Skipped</button></div>
+      ${S==='modified'?`<label class="field" for="f-note"><small>What changed? (optional)</small><input type="text" id="f-note" maxlength="80" value="${esc(L.note||'')}" placeholder="e.g. walked the last 2 intervals"></label>`:''}</div>`:'';
+  const ro=!own&&day.type!=='rest'?`<p class="ro">${S==='skipped'?'Skipped':S==='modified'?'Done, modified'+(L.note?`: ${esc(L.note)}`:''):S?'Completed':'Not logged yet'}${L.rpe!=null?` · effort ${L.rpe}/10`:''}${L.pain!=null?` · pain ${L.pain}/10`:''}${L.morning!=null?` · next morning ${L.morning}/10`:''}</p>`:'';
+  const ratings=own&&day.type==='run'&&isDone(L)?`<div class="logs">
+      ${ratingRow('rpe','Effort (RPE)',1,10,L.rpe??null,'1 = very easy, 4 = easy talking pace, 8+ = can\'t talk')}
+      ${r.mode==='rtr'?ratingRow('pain','Pain during the run',0,10,L.pain??null,'0–2 fine · 3–4 caution · 5+ stop')+ratingRow('morning','Pain the next morning',0,10,L.morning??null,past?'':'Come back tomorrow morning to enter this.'):''}
     </div>`:'';
 
-  view.innerHTML=`<div style="display:flex;flex-direction:column;gap:18px">
+  view.innerHTML=`<div class="stack">
     ${head}
-    ${ladder(pw)}
-    <div class="status"><span class="big">Week ${pw+1} <span class="muted">/ ${TOTAL}</span></span><span class="muted">${own?'':esc(nameOf(UI.who))+' · '}${ph.name} · week ${wk.wip} of ${ph.weeks}${notStarted?` · starts ${fmtDate(mon)}`:''}</span><span class="pill ${sp.c}">${sp.t}</span></div>
-    ${wk.note?`<p class="muted" style="font-size:.9rem">${wk.note}</p>`:''}
+    <p class="where">${own?'':esc(nameOf(UI.who))+' · '}Week ${pw+1} of ${TOTAL} · ${ph.name}, week ${wk.wip}${notStarted?` · starts ${fmtDate(mon)}`:''}</p>
     <section class="card session t-${day.type}">
-      <span class="chip">${DOW[UI.sel]} ${fmtDate(date)} · ${isRace?'Race day':day.title}${UI.sel===tDow&&!notStarted?' · today':''}</span>
-      <h2>${esc(day.type==='run'?runTitle(day.run):day.title)}</h2>
-      <p class="muted">${esc(day.type==='run'?runDetail(day.run):day.detail)}</p>
+      <span class="chip">${DOW[UI.sel]} ${fmtDate(date)} · ${isRace?'Race day':day.title}${isToday?' · today':''}</span>
+      <h2>${esc(title)}</h2>
+      <p class="sub">${esc(sub)}</p>
+      ${primary?`<div class="actions">${primary}</div>`:''}
       ${body}
-      <div class="actions">${own?timerBtn:''}${doneBtn}</div>
-      ${logFields}
+      ${statusBtns}${ro}
+      ${ratings}
     </section>
-    <div style="display:flex;flex-direction:column;gap:8px">
+    ${wk.note?`<p class="muted" style="font-size:.9rem">${wk.note}</p>`:''}
+    <div class="stack" style="gap:8px">
       <h3>${own?'This week':esc(nameOf(UI.who))+"'s week"}</h3>
-      <div class="week">${days.map((d,i)=>{const dd=addDays(mon,i),k=iso(dd),done=logs[k]&&logs[k].done;
+      <div class="week">${days.map((d,i)=>{const dd=addDays(mon,i),k=iso(dd),Ld=logs[k],s=statusOf(Ld);
+        const mark=s==='skipped'?'<span aria-hidden="true">–</span>':s?CHECK:'';
+        const cls=s==='skipped'?'skip':s?'on':'';
         return `<div class="day t-${d.type} ${i===UI.sel?'sel':''} ${i===tDow&&!notStarted?'today':''}" role="button" tabindex="0" data-sel="${i}">
           <div class="dn">${DOW[i]}<small>${fmtDate(dd)}</small></div>
-          <div class="what"><span class="chip">${k===RACE&&d.type==='run'?'Race day':d.title}</span><span>${esc(d.type==='run'?runTitle(d.run):d.type==='rest'?d.detail.split(/[,.]/)[0]:d.type==='cross'?['20–30','30–40','40–50'][wk.ph]+' min low-impact cardio':'Runner strength circuit')}</span></div>
-          ${own?`<button class="check ${done?'on':''}" data-done="${k}" aria-label="Mark ${DOW[i]} complete">${done?CHECK:''}</button>`:`<span class="check ${done?'on':''}" aria-label="${done?'Completed':'Not completed'}">${done?CHECK:''}</span>`}</div>`}).join('')}</div>
+          <div class="what"><span class="chip">${k===RACE&&d.type==='run'?'Race day':d.title}</span><span>${esc(d.type==='run'?sessionTitle(d.run):d.type==='rest'?d.detail.split(/[,.]/)[0]:d.type==='cross'?['20–30','30–40','40–50'][wk.ph]+' min low-impact cardio':'Runner strength circuit')}</span></div>
+          ${d.type==='rest'?'<span></span>':own?`<button class="check ${cls}" data-done="${k}" aria-label="${s?DOW[i]+' logged as '+s+'; tap to clear':'Mark '+DOW[i]+' done'}">${mark}</button>`:`<span class="check ${cls}" aria-label="${s||'Not logged'}">${mark}</span>`}</div>`}).join('')}</div>
     </div>
     <section class="card">
       <h3>Weekly check-in</h3>
@@ -348,8 +445,9 @@ function renderToday(){
         <button class="btn small" id="holdRepeat">Repeat this week next week</button>
         <button class="btn small" id="holdBack">Step back one week</button>
         ${held?`<button class="btn small" id="holdUndo">Undo (${held} held)</button>`:''}
-      </div><p class="muted" style="font-size:.82rem">Each repeat pushes your finish one week later. ${scheduleDiff(r)<0?`You have ${-scheduleDiff(r)} buffer week(s) before May 15.`:'You have no buffer weeks before May 15; start earlier in Setup to build some.'}</p>`:''}
+      </div><p class="muted" style="font-size:.82rem">Each repeat pushes your finish one week later. ${scheduleDiff(r)<0?`You have ${plural(-scheduleDiff(r),'spare week')} before May 15.`:'You have no spare weeks before May 15; start earlier in Setup to build some.'}</p>`:''}
     </section>
+    ${timeline(r,pw)}
   </div>`;
 
   bindWho();bindJoin();
@@ -359,45 +457,53 @@ function renderToday(){
   });
   if(!own)return;
   view.querySelectorAll('[data-done]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();toggle(b.dataset.done)}));
-  document.getElementById('markDone').onclick=()=>toggle(key);
-  view.querySelectorAll('.logs input').forEach(inp=>{
-    inp.addEventListener('input',()=>{inp.previousElementSibling.textContent=inp.value+'/10'});
-    inp.addEventListener('change',()=>saveMine({logs:{[key]:{[inp.dataset.k]:+inp.value}}}));
-  });
-  const tb=document.getElementById('startTimer'); if(tb) tb.onclick=()=>openTimer(fullSegs(day.run),runTitle(day.run),key);
+  view.querySelectorAll('[data-st]').forEach(b=>b.onclick=()=>setStatus(key,b.dataset.st));
+  view.querySelectorAll('[data-rate]').forEach(b=>b.onclick=()=>{const k=b.dataset.rate,v=+b.dataset.v;saveMine({logs:{[key]:{[k]:L[k]===v?null:v}}})});
+  const nt=document.getElementById('f-note'); if(nt) nt.onchange=()=>saveMine({logs:{[key]:{note:nt.value.trim()}}});
+  const tb=document.getElementById('startTimer'); if(tb) tb.onclick=()=>openTimer(fullSegs(day.run),sessionTitle(day.run),key);
   const holds=()=>[...(r.holds||[])];
   const hr=document.getElementById('holdRepeat'); if(hr) hr.onclick=()=>saveMine({holds:[...holds(),cw]});
   const hb=document.getElementById('holdBack'); if(hb) hb.onclick=()=>saveMine({holds:[...holds(),cw,cw]});
   const hu=document.getElementById('holdUndo'); if(hu) hu.onclick=()=>{const h=holds(),i=h.lastIndexOf(cw);if(i>-1)h.splice(i,1);saveMine({holds:h})};
 }
-function toggle(k){const L=(mine().logs||{})[k]||{};saveMine({logs:{[k]:{done:!L.done}}})}
+function setStatus(k,s){const cur=statusOf((mine().logs||{})[k]);const next=cur===s?null:s;saveMine({logs:{[k]:{status:next,done:next==='done'||next==='modified'}}})}
+function toggle(k){const s=statusOf((mine().logs||{})[k]);saveMine({logs:{[k]:s?{status:null,done:false}:{status:'done',done:true}}})}
+function timeline(r,pw){
+  const sp=schedulePill(r);
+  return `<section class="stack" style="gap:8px"><div class="tl-h"><span class="eyebrow">Plan timeline · moves with the calendar</span><span class="pill ${sp.c}">${sp.t}</span></div>${ladder(pw)}</section>`;
+}
 
 function renderCrew(){
   const t=today(), days=Math.max(0,dayNum(parse(RACE))-dayNum(t));
   const ids=orderedIds();
-  const cards=ids.map((id,i)=>{
+  const cards=ids.map(id=>{
     const r=RUNNERS[id], N=runnerNow(r), sp=schedulePill(r);
-    let weekHtml='', summary='', st={c:''};
+    let weekHtml='', summary='', counts='', st={c:'',t:''};
     if(N.finished){summary='Program complete';}
     else{
       const {wk,days:ds}=weekDays(N.pw,r.runDays), logs=r.logs||{};
-      const planned=ds.filter(d=>d.type!=='rest').length;
-      const done=ds.filter((d,j)=>d.type!=='rest'&&logs[iso(addDays(N.mon,j))]&&logs[iso(addDays(N.mon,j))].done).length;
       const tDow=(t.getDay()+6)%7;
-      weekHtml=`<div class="sq">${ds.map((d,j)=>{const k=iso(addDays(N.mon,j)),on=logs[k]&&logs[k].done;return `<span class="t-${d.type} ${d.type==='rest'?'rest':''} ${on?'on':''} ${j===tDow&&!N.notStarted?'tod':''}" title="${DOW[j]}: ${esc(d.type==='run'?runTitle(d.run):d.title)}">${DOW[j].charAt(0)}</span>`}).join('')}</div>`;
+      const c={run:[0,0],cross:[0,0],strength:[0,0]};
+      ds.forEach((d,j)=>{if(!c[d.type])return;c[d.type][1]++;if(isDone(logs[iso(addDays(N.mon,j))]))c[d.type][0]++});
+      weekHtml=`<div class="sq">${ds.map((d,j)=>{const k=iso(addDays(N.mon,j)),s=statusOf(logs[k]);return `<span class="t-${d.type} ${d.type==='rest'?'rest':''} ${s==='skipped'?'skip':s?'on':''} ${j===tDow&&!N.notStarted?'tod':''}" title="${DOW[j]}: ${esc(d.type==='run'?sessionTitle(d.run):d.title)}${s?' ('+s+')':''}">${DOW[j].charAt(0)}</span>`}).join('')}</div>`;
+      counts=`<div class="counts"><span><b>${c.run[0]} of ${c.run[1]}</b> runs</span><span><b>${c.cross[0]} of ${c.cross[1]}</b> cross</span><span><b>${c.strength[0]} of ${c.strength[1]}</b> strength</span></div>`;
       st=weekStatus(r,N.mon,ds);
-      summary=N.notStarted?`Starts ${fmtDate(N.mon)} · ${PHASES[wk.ph].name}`:`${PHASES[wk.ph].name} · wk ${wk.wip} of ${PHASES[wk.ph].weeks} · ${done}/${planned} sessions this week`;
+      summary=N.notStarted?`Starts ${fmtDate(N.mon)} · ${PHASES[wk.ph].name}`:`This week · ${PHASES[wk.ph].name}, week ${wk.wip} of ${PHASES[wk.ph].weeks}`;
     }
-    const total=Object.values(r.logs||{}).filter(l=>l&&l.done).length;
+    const all=Object.values(r.logs||{}).filter(isDone).length;
+    const ms=milestone(r);
     return `<button type="button" class="rc" data-open="${esc(id)}">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%"><span class="nm"><span class="av" style="--c:${colorOf(id)}">${esc(initial(nameOf(id)))}</span><b>${esc(nameOf(id))}</b>${id===ME?'<span class="muted" style="font-size:.8rem">you</span>':''}</span><span class="pill ${sp.c}">${sp.t}</span></div>
-      ${ladder(Math.min(TOTAL,N.pw))}
+      <div class="rc-h"><span class="nm"><span class="av" style="--c:${colorOf(id)}">${esc(initial(nameOf(id)))}</span><b>${esc(nameOf(id))}</b>${id===ME?'<span class="muted" style="font-size:.8rem">you</span>':''}</span><span class="mono muted" style="font-size:.8rem">${plural(all,'session')} done</span></div>
       <span class="muted" style="font-size:.86rem">${summary}</span>
+      ${counts}
       ${weekHtml}
-      <span style="display:flex;justify-content:space-between;gap:8px;font-size:.82rem" class="muted"><span><span class="dot ${st.c}" style="display:inline-block;width:9px;height:9px;margin:0 6px 0 0;vertical-align:0"></span>${esc(st.t||'')}</span><span class="mono">${total} done</span></span>
+      ${ms?`<span class="ms">${esc(ms)}</span>`:''}
+      ${st.t?`<span class="muted" style="font-size:.82rem"><span class="dot ${st.c}" style="display:inline-block;width:9px;height:9px;margin:0 6px 0 0;vertical-align:0"></span>${esc(st.t)}</span>`:''}
+      <div class="tl-h"><span class="eyebrow">Plan timeline</span><span class="pill ${sp.c}">${sp.t}</span></div>
+      ${ladder(Math.min(TOTAL,N.pw))}
     </button>`;
   }).join('');
-  view.innerHTML=`<div style="display:flex;flex-direction:column;gap:18px">
+  view.innerHTML=`<div class="stack">
     ${banners()}
     <section class="card race">
       <div><span class="eyebrow">Race day</span><h2 style="font-size:2rem">Sat, May 15, 2027</h2><p class="muted">10 miles. Plans that start Nov 9 finish on race morning.</p></div>
@@ -410,31 +516,52 @@ function renderCrew(){
   bindJoin();
   view.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{UI.who=b.dataset.open;UI.sel=null;UI.tab='today';render()});
 }
+// Most recent milestone reached through completed workouts, not the calendar.
+function milestone(r){
+  const logs=r.logs||{}, keys=Object.keys(logs).filter(k=>isDone(logs[k])).sort();
+  if(!keys.length) return '';
+  let best='';
+  const startMon=startMonR(r);
+  keys.forEach(k=>{
+    const d=parse(k), cw=calWeekR(r,d); if(cw<0)return;
+    const w=progWeekR(r,cw), dow=(d.getDay()+6)%7, {days}=weekDays(w,r.runDays), day=days[dow];
+    if(!day||day.type!=='run')return;
+    const ru=day.run;
+    if(ru.kind==='interval'&&ru.seg.length===1) best=`First ${runSeconds(ru.seg)/60}-minute continuous run`;
+    if(ru.kind==='goal') best='Finished the 10K goal run';
+    if(ru.kind==='race') best='Ran 10 miles on race day';
+    if(ru.kind==='long'&&ru.mi>=5) best=`Longest run so far: ${fmtD(ru.mi)}`;
+  });
+  if(!best) best=`${plural(keys.length,'workout')} logged`;
+  return best;
+}
 
 function renderPlan(){
   if(!LOADED){view.innerHTML=`<p class="muted">Loading…</p>`;return}
   const r=viewing()||{entry:0,runDays:3,start:defaultStart(0),holds:[]};
-  const N=runnerNow(r), cur=N.notStarted?-1:N.pw;
-  // calendar Monday for each program week (first occurrence, honoring repeats)
+  const N=runnerNow(r), cur=N.notStarted?-1:N.pw, focus=N.notStarted?STARTS[r.entry]:N.pw;
+  const runDow=r.runDays===3?['Tue','Thu','Sat']:['Tue','Sat'];
   const weekMon={};for(let cw=0;cw<80;cw++){const w=progWeekR(r,cw);if(w>=TOTAL)break;if(weekMon[w]==null)weekMon[w]=addDays(startMonR(r),cw*7)}
-  view.innerHTML=`<div style="display:flex;flex-direction:column;gap:26px">
+  view.innerHTML=`<div class="stack" style="gap:20px">
     ${whoBar()}
-    <p class="muted" style="max-width:65ch">${viewing()?esc(nameOf(UI.who))+': ':''}${r.runDays} run days and ${r.runDays===3?'2':'3'} cross-training / strength days each week. Runs fall on Tue${r.runDays===3?', Thu':''} and Sat; cross-training on Wed${r.runDays===2?', Thu':''}; strength on Fri.</p>
+    <p class="muted" style="max-width:65ch">${viewing()?esc(nameOf(UI.who))+': ':''}${r.runDays} runs a week on ${runDow.join(', ')}. Cross-training on Wed${r.runDays===2?' and Thu':''}, strength on Fri. Times shown are per session, including warm-up and cool-down walks.</p>
     ${PHASES.map((p,pi)=>{
       if(STARTS[pi]+p.weeks<=STARTS[r.entry]) return `<section class="phase"><header><h2 class="muted">${p.name}</h2><span class="muted" style="font-size:.88rem">Skipped: starting at ${PHASES[r.entry].name}</span></header></section>`;
+      const here=focus>=STARTS[pi]&&focus<STARTS[pi]+p.weeks, done=focus>=STARTS[pi]+p.weeks;
       let rows='';
       for(let w=STARTS[pi];w<STARTS[pi]+p.weeks;w++){
-        const wk=weekInfo(w), rs=pickRuns(wk.runs,r.runDays);
-        const tot=pi===0?`${rs.reduce((a,x)=>a+runSeconds(x.seg),0)/60} min run`:fmtD(rs.reduce((a,x)=>a+x.mi,0))+' / wk';
-        const m=weekMon[w];
+        const wk=weekInfo(w), rs=pickRuns(wk.runs,r.runDays), m=weekMon[w];
+        const mins=pi===0?rs.map(x=>Math.round(fullSegs(x).reduce((a,s)=>a+s[1],0)/60)):[], lo=Math.min(...mins), hi=Math.max(...mins);
+        const tot=pi===0?(lo===hi?`${lo} min each`:`${lo}–${hi} min each`):`Week total ${fmtD(rs.reduce((a,x)=>a+x.mi,0))}`;
         rows+=`<div class="wrow ${w<cur?'past':''} ${w===cur?'cur':''}">
           <div class="wk">Wk ${wk.wip}<small>${m?fmtDate(m):'#'+(w+1)}${w===cur?' · now':''}</small></div>
-          <div class="runs">${rs.map((x,i)=>`<span class="${i===rs.length-1?'key':''}" title="${esc(runTitle(x))}">${esc(pi===0?x.d:runShort(x))}</span>`).join('')}</div>
+          <div class="runs">${rs.map((x,i)=>`<span class="${i===rs.length-1?'key':''}" title="${esc(x.kind==='interval'?describeIntervals(x.seg):runTitle(x))}"><b>${runDow[i]}</b> ${esc(pi===0?(x.seg.length===1?`${runSeconds(x.seg)/60} min run`:`${Math.round(fullSegs(x).reduce((a,s)=>a+s[1],0)/60)} min run/walk`):runShort(x))}</span>`).join('')}</div>
           <div class="tot">${tot}</div>
           ${wk.note?`<div class="note">${wk.note}</div>`:''}
+          ${pi===0&&w===cur?`<div class="note">${rs.map((x,i)=>`${runDow[i]}: ${esc(describeIntervals(x.seg))}`).join('<br>')}</div>`:''}
         </div>`;
       }
-      return `<section class="phase"><header><h2>${p.name}</h2><span class="muted" style="font-size:.88rem">${p.weeks} weeks · goal: ${p.goal}</span></header>${rows}</section>`;
+      return `<details class="phase" ${here?'open':''}><summary><span class="ph-t"><h2>${p.name}</h2><span class="muted" style="font-size:.88rem">${p.weeks} weeks · ${done?'done by the calendar':here?'you are here':'coming up'} · goal: ${p.goal}</span></span></summary><div class="stack" style="gap:8px">${rows}</div></details>`;
     }).join('')}
   </div>`;
   bindWho();
@@ -451,7 +578,7 @@ const READY_ITEMS=[
 ];
 function renderGuide(){
   const me=mine(), ready=(me&&me.ready)||{};
-  view.innerHTML=`<div style="display:flex;flex-direction:column;gap:22px">
+  view.innerHTML=`<div class="stack" style="gap:22px">
   <section class="card"><div class="prose">
     <h2>How the program works</h2>
     <p>Three phases, 27 weeks, timed to finish on race day, Saturday May 15: Couch → 5K (9 weeks of run/walk intervals), 5K → 10K (8 weeks), and 10K → 10 miles (10 weeks). Each week has 2 or 3 runs, never on back-to-back days, plus 2–3 days of cross-training and strength.</p>
@@ -527,10 +654,10 @@ function renderGuide(){
 function renderSetup(){
   if(!LOADED){view.innerHTML=`<p class="muted">Loading…</p>`;return}
   const r=mine();
-  if(!r){view.innerHTML=`<div style="display:flex;flex-direction:column;gap:18px">${banners()}${joinCard()}</div>`;bindJoin();return}
+  if(!r){view.innerHTML=`<div class="stack">${banners()}${joinCard()}</div>`;bindJoin();return}
   const seg=(k,opts)=>`<div class="seg">${opts.map(([v,l])=>`<button type="button" data-k="${k}" data-v="${v}" aria-pressed="${r[k]==v}">${l}</button>`).join('')}</div>`;
   const aligned=r.start===defaultStart(r.entry);
-  view.innerHTML=`<div style="display:flex;flex-direction:column;gap:18px">${banners()}<section class="card" style="gap:22px">
+  view.innerHTML=`<div class="stack">${banners()}<section class="card" style="gap:22px">
     <h2>Your setup</h2>
     ${LOCAL?'':`<label class="field" for="f-name"><span>Name shown to the crew</span><input type="text" id="f-name" maxlength="24" value="${esc(r.name||'')}" style="font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);max-width:320px"></label>`}
     <div class="field"><span>Start at</span>${seg('entry',[[0,'Couch → 5K'],[1,'5K → 10K'],[2,'10K → 10 mi']])}<small>Changing this resets your start date so the plan still ends on May 15.</small></div>
@@ -551,10 +678,10 @@ function renderSetup(){
     saveMine(k==='entry'?{entry:v,start:defaultStart(v),holds:[]}:{[k]:v});
   });
   const ch=document.getElementById('clearHolds'); if(ch) ch.onclick=()=>saveMine({holds:[]});
-  const sw=document.getElementById('switchMe'); if(sw) sw.onclick=async()=>{if(dirty)await push();ME=null;store.set('c10-me',null);UI.newRunner=false;UI.tab='crew';render()};
+  const sw=document.getElementById('switchMe'); if(sw) sw.onclick=async()=>{if(QUEUE.length)await push();if(QUEUE.length){ERR=`${plural(QUEUE.length,'change')} from ${mine().name} haven't uploaded yet. Switch runners once they're saved so they aren't lost.`;render();return}ME=null;store.set('c10-me',null);UI.newRunner=false;UI.tab='crew';render()};
   const lv=document.getElementById('leave'); if(lv) lv.onclick=()=>{UI.confirmLeave=true;render()};
   const ln=document.getElementById('leaveNo'); if(ln) ln.onclick=()=>{UI.confirmLeave=false;render()};
-  const ly=document.getElementById('leaveYes'); if(ly) ly.onclick=async()=>{UI.confirmLeave=false;try{const all=await apiPost({action:'delete',id:ME});dirty=false;store.set('c10-pending',null);ME=null;store.set('c10-me',null);applyServer(all);UI.who=orderedIds()[0]||null;UI.tab='crew'}catch(e){ERR='Could not delete your plan just now. Check your connection.'}render()};
+  const ly=document.getElementById('leaveYes'); if(ly) ly.onclick=async()=>{UI.confirmLeave=false;try{const all=await apiPost({action:'delete',id:ME});QUEUE=[];persistQueue();ME=null;store.set('c10-me',null);applyServer(all);UI.who=orderedIds()[0]||null;UI.tab='crew'}catch(e){ERR='Could not delete your plan. '+(e.message||'')}render()};
 }
 
 /* ---------- timer ---------- */
@@ -573,7 +700,7 @@ function tick(){
   if(!T||!T.running)return;const now=performance.now();T.el+=(now-T.last)/1000;T.last=now;
   while(T.idx<T.segs.length&&T.el>=T.segs[T.idx][1]){T.el-=T.segs[T.idx][1];T.idx++;if(T.idx<T.segs.length)cue(T.segs[T.idx][0]);}
   if(T.idx>=T.segs.length){T.running=false;clearInterval(iv);beep(660,.2);beep(880,.2,.25);beep(1100,.35,.5);
-    if(!T.logged&&mine()){T.logged=true;saveMine({logs:{[T.key]:{done:true}}})}}
+    if(!T.logged&&mine()){T.logged=true;saveMine({logs:{[T.key]:{done:true,status:'done'}}})}}
   drawTimer();
 }
 function drawTimer(){
