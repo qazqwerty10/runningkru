@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Couch to 10 Miles</title>
-<meta name="description" content="Shared Couch to 5K to 10K to 10-mile training plan for the May 15 race.">
+<title>RunningKru</title>
+<meta name="description" content="RunningKru: train together and run your race. Shared plans, run/walk timer, strength sessions and progress for your Kru.">
 <meta name="theme-color" content="#EEF1F4" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0D1218" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="10 Miles">
+<meta name="apple-mobile-web-app-title" content="RunningKru">
+<meta name="application-name" content="RunningKru">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="manifest" href="manifest.webmanifest">
@@ -264,6 +265,23 @@ details.phase[open]>summary{margin-bottom:8px}
 .ex-sub{display:flex;flex-direction:column;gap:3px;max-width:320px}
 .ex-last{font-size:.8rem;color:var(--muted)}
 .ex-last.ready{color:var(--ok);font-weight:600}
+.tag{margin:2px 0 0;color:var(--muted);font-size:.95rem}
+.nextup{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;margin-top:10px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);text-align:left;max-width:100%}
+.nextup .nu-k{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--run)}
+.nextup b{font-family:var(--f-display);font-size:1.1rem;text-transform:uppercase;letter-spacing:.02em}
+.nextup .nu-d{flex-basis:100%;font-size:.82rem;color:var(--muted)}
+.racebtn{width:100%;text-align:left;cursor:pointer}
+.racebtn:hover{border-color:var(--run)}
+.more-link{display:inline-block;margin-top:6px;font-size:.84rem;font-weight:600;color:var(--run)}
+.verdict{margin:0;font-weight:600;font-size:.92rem;padding:8px 12px;border-radius:8px}
+.verdict.ok{background:var(--cross-soft);color:var(--ink)}
+.verdict.warn{background:var(--strength-soft);color:var(--ink)}
+.verdict.bad{background:color-mix(in srgb,var(--bad) 14%,var(--surface));color:var(--ink)}
+.rp{display:flex;flex-direction:column;gap:4px;padding:10px 0;border-top:1px solid var(--line);font-size:.88rem}
+.rp:first-of-type{border-top:0}
+.rp .nm{display:flex;align-items:center;gap:8px}
+a.btn{text-decoration:none;color:var(--ink);display:inline-flex;align-items:center}
+.card th{white-space:nowrap}
 @media (max-width:640px){
   .tabs{position:fixed;left:0;right:0;bottom:0;z-index:40;border-radius:0;border-width:1px 0 0;justify-content:space-around;
     padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px))}
@@ -282,8 +300,10 @@ details.phase[open]>summary{margin-bottom:8px}
 <div class="app">
   <header class="top">
     <div>
-      <div class="eyebrow">Road to May 15 · 10 miles · <span class="sync" id="sync" data-state="idle">Connecting…</span></div>
-      <h1>Couch to 10 Miles</h1>
+      <div class="eyebrow"><span class="sync" id="sync" data-state="idle">Connecting…</span></div>
+      <h1>RunningKru</h1>
+      <p class="tag">Train together. Run your race.</p>
+      <button type="button" class="nextup" id="nextUp"><span class="nu-k">Next up</span> <b id="nuName">Colfax Urban 10 Miler</b><span class="nu-d" id="nuDate">Sunday, May 16, 2027 · 10 miles · Denver</span></button>
     </div>
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button role="tab" data-tab="today" id="tab-today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Today</span></button>

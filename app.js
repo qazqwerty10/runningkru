@@ -12,15 +12,30 @@ const DOW=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const fmtDate=d=>d.toLocaleDateString(undefined,{month:'short',day:'numeric'});
 const today=()=>{const d=new Date();d.setHours(0,0,0,0);return d};
 
-/* ---------- race ---------- */
-const RACE='2027-05-15';
-const RACE_MON=mondayOf(parse(RACE));
+/* ---------- race: the one place the goal race is defined ---------- */
+const RACE_CFG={
+  name:'Colfax Urban 10 Miler', date:'2027-05-16', miles:10, city:'Denver',
+  start:'Rocky Mountain College of Art and Design, Lakewood', startWindow:'7:45–8:45 a.m. staggered start; your assigned wave is on your bib',
+  finish:'City Park, Denver', highlights:'Empower Field at Mile High, the Confluence, Cherry Creek and 17th Avenue',
+  aid:'Water and Gatorade about every 2 miles', limitSec:9000,
+  pickup:'Packet pickup is Friday and Saturday at the race expo. There is no race-day packet pickup.',
+  links:{race:'https://www.runcolfax.org/races/urban-10-miler/',register:'https://www.runcolfax.org/races/register/'}
+};
+const RACE=RACE_CFG.date;
+const RACE_DATE=parse(RACE);
+const RACE_MON=mondayOf(RACE_DATE);
+const RACE_DOW=(RACE_DATE.getDay()+6)%7;              // 0 = Monday … 6 = Sunday
+const RACE_DAYNAME=RACE_DATE.toLocaleDateString('en-US',{weekday:'long'});
+const RACE_SHORT=RACE_DATE.toLocaleDateString('en-US',{month:'long',day:'numeric'});           // May 16
+const RACE_LONG=RACE_DATE.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'}); // Sunday, May 16, 2027
+// race-week runs: easy runs early in the week, at least two days before the race
+const raceWeekRuns=n=>{const easy=n===3?[1,3]:[1];return [...easy.filter(d=>d<=RACE_DOW-2),RACE_DOW]};
 
 /* ---------- program data ---------- */
 const PHASES=[
   {name:'Couch → 5K',short:'Couch → 5K',weeks:9,goal:'Run 30 minutes (about 5K) without stopping'},
   {name:'5K → 10K',short:'5K → 10K',weeks:8,goal:'Run a 10K (6.2 mi)'},
-  {name:'10K → 10 Mile',short:'10K → 10 mi',weeks:10,goal:'Run 10 miles on race day'}
+  {name:'10K → 10 Mile',short:'10K → 10 mi',weeks:10,goal:`Run the ${RACE_CFG.name}`}
 ];
 const STARTS=[0,9,17]; const TOTAL=27;
 const R=s=>['run',s],W=s=>['walk',s];
@@ -51,7 +66,7 @@ function weekInfo(w){
   }
   if(CUTBACK[ph+'-'+wip]) note='Cutback week: lower volume so tissues can adapt before the next build.';
   if(ph===0&&wip===5) note='Big week: first continuous run. Repeat week 4 or 5 if run 3 is out of reach.';
-  if(wip===PHASES[ph].weeks) note=ph===0?'Finish line for phase 1. A local 5K or a solo time trial both count.':ph===1?'Taper and 10K goal run. Keep the early runs short and easy.':'Race week. Two short easy runs, then 10 miles on Saturday.';
+  if(wip===PHASES[ph].weeks) note=ph===0?'Finish line for phase 1. A local 5K or a solo time trial both count.':ph===1?'Taper and 10K goal run. Keep the early runs short and easy.':`Race week. Short easy runs, then the ${RACE_CFG.name} on ${RACE_DAYNAME}.`;
   return {ph,wip,runs,note};
 }
 const pickRuns=(runs,n)=>n===3?runs:[runs[0],runs[2]];
@@ -73,7 +88,7 @@ function runShort(r){
 }
 function runDetail(r){
   if(r.kind==='interval') return 'Start with a 5 min brisk walk and finish with a 5 min walk. Run slowly enough to talk in short sentences (RPE 4–5/10). The timer cues every switch.';
-  if(r.kind==='race') return 'Race day. Start slower than feels right for the first two miles, settle in, and only pick it up after mile 8. Planned walk breaks are fine.';
+  if(r.kind==='race') return `Race day: the ${RACE_CFG.name}. Start slower than feels right for the first two miles, settle in, and only pick it up after mile 8. Planned walk breaks are fine. Afterward, keep walking for 10 minutes, refuel, and take the next few days easy.`;
   if(r.kind==='goal') return 'Goal run. Start slower than feels right for the first mile, settle in, and only pick it up in the final stretch. Walk breaks are allowed.';
   if(r.kind==='long') return 'Long run at easy, conversational pace (RPE 3–4/10). Planned walk breaks, such as 1 min every 8–10 min, are a legitimate strategy and do not count against you.';
   return 'Easy pace (RPE 3–4/10): you can speak in full sentences.'+(r.strides?' Finish with 4 × 20 s relaxed strides, walking back to recover.':'');
@@ -110,11 +125,12 @@ function weekDays(w,r,mon){
   const runs=pickRuns(wk.runs,n);
   const days=Array.from({length:7},()=>({...rest}));
   if(raceWeek){
-    // Race week is the same for everyone so the race lands on Saturday, May 15.
-    const rd=n===3?[1,3,5]:[1,5];
-    rd.forEach((d,i)=>{days[d]={type:'run',title:i===rd.length-1?keyLabel:`Run ${i+1}`,run:runs[i]}});
-    days[4]={type:'rest',title:'Rest',detail:'Full rest before race day. Hydrate and eat a familiar dinner.'};
-    days[6]={type:'rest',title:'Recovery',detail:'Easy walk, mobility, celebrate.'};
+    // Race week is the same for everyone so the race lands on the real race day.
+    const rd=raceWeekRuns(n), easy=runs.slice(0,runs.length-1);
+    rd.forEach((d,i)=>{days[d]=i===rd.length-1?{type:'run',title:keyLabel,run:runs[runs.length-1]}:{type:'run',title:`Run ${i+1}`,run:easy[i]||easy[easy.length-1]}});
+    if(RACE_DOW>=2) days[RACE_DOW-2]=days[RACE_DOW-2].type==='run'?days[RACE_DOW-2]:{type:'rest',title:'Rest · packet pickup',detail:RACE_CFG.pickup};
+    if(RACE_DOW>=1) days[RACE_DOW-1]={type:'rest',title:'Rest',detail:'Full rest before race day. Hydrate, eat a familiar dinner, and lay out your kit and bib. '+RACE_CFG.pickup};
+    if(RACE_DOW<6) days[RACE_DOW+1]={type:'rest',title:'Recovery',detail:'Easy walk, mobility, celebrate.'};
     return {wk,days,raceWeek,moved:false};
   }
   const s=schedOf(r,mon), rd=[...s.run].sort((a,b)=>a-b);
@@ -329,7 +345,9 @@ const CHECK='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-w
 
 function render(){
   document.querySelectorAll('.tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===UI.tab));
-  ({today:renderToday,crew:renderCrew,plan:renderPlan,guide:renderGuide,setup:renderSetup})[UI.tab]();
+  ({today:renderToday,crew:renderCrew,plan:renderPlan,guide:renderGuide,setup:renderSetup,race:renderRace}[UI.tab]||renderToday)();
+  const nu=document.getElementById('nextUp'); if(nu&&!nu.dataset.bound){nu.dataset.bound=1;nu.onclick=openRace;document.getElementById('nuName').textContent=RACE_CFG.name;document.getElementById('nuDate').textContent=`${RACE_LONG} · ${RACE_CFG.miles} miles · ${RACE_CFG.city}`}
+  document.querySelectorAll('.tabs button').forEach(b=>{if(UI.tab==='race')b.setAttribute('aria-selected','false')});
   const rb=document.getElementById('retrySync'); if(rb) rb.onclick=retryNow;
   paintSync();
 }
@@ -376,7 +394,7 @@ function joinCard(){
   const J=UI.join;
   const seg=(k,opts)=>`<div class="seg">${opts.map(([v,l])=>`<button type="button" data-j="${k}" data-v="${v}" aria-pressed="${J[k]==v}">${l}</button>`).join('')}</div>`;
   return `<section class="card join">
-    <div><h2>Join the Kru</h2><p class="muted">Get your own plan aimed at May 15. Everyone with the link sees your plan and completed workouts; your pain ratings stay private to you.</p></div>
+    <div><h2>Join the Kru</h2><p class="muted">Get your own plan aimed at the ${esc(RACE_CFG.name)} on ${RACE_SHORT}. Everyone with the link sees your plan and completed workouts; your pain ratings stay private to you.</p></div>
     <label class="field" for="j-name"><span>Your first name</span><input type="text" id="j-name" maxlength="24" value="${esc(J.name)}" placeholder="First name" autocomplete="given-name"></label>
     <div class="field"><span>Where are you starting?</span>${seg('entry',[[0,'Not running yet'],[1,'Can run 30 min'],[2,'Can run a 10K']])}<small>Your start date: ${fmtDate(parse(defaultStart(J.entry)))}, timed so the plan ends on race day.</small></div>
     <div class="field"><span>Run days per week</span>${seg('runDays',[[3,'3 runs + 2 cross'],[2,'2 runs + 3 cross']])}<small>You can choose which days in Setup after joining.</small></div>
@@ -521,7 +539,7 @@ function planFor(run,r,date){
     if(pace) P.est=`Estimated running time: ${fmtDur(mi*pace)} at your saved ${fmtPace(r)} pace.`;
     P.label=`${fmtD(mi)} running`+(pace?` · ~${Math.round(mi*pace/60)+10} min total`:'');
     P.meta=[['Distance',fmtD(mi)],...(pace?[['Est. running',fmtDurShort(mi*pace)]]:[])];
-    if(fixed&&want==='time') P.fallback=run.kind==='race'?'Race day is always the full 10 miles.':'The goal run is set by distance.';
+    if(fixed&&want==='time') P.fallback=run.kind==='race'?`Race day is always the full ${RACE_CFG.miles} miles.`:'The goal run is set by distance.';
   }
   P.sub=runDetail(run)+WU;P.mi=P.mi||mi;
   return P;
@@ -536,7 +554,7 @@ function sessionOn(r,k){
 const STR_TITLE='Full-body strength';
 function plannedSnapshot(r,k){
   const day=sessionOn(r,k); if(!day) return null;
-  if(day.type==='run'){const P=planFor(day.run,r,k);return {title:P.title,label:P.label}}
+  if(day.type==='run'){const P=planFor(day.run,r,k);return clone({title:P.title,label:P.label,sub:P.sub,est:P.est,meta:P.meta,segs:P.segs||null,mode:P.mode,runSec:P.runSec,totSec:P.totSec||null,mi:P.mi||null,single:!!P.single})}
   if(day.type==='strength') return {title:STR_TITLE,label:'45–55 min'};
   return {title:day.title,label:''};
 }
@@ -558,9 +576,13 @@ const STRENGTH=[
 ];
 const exSets=(r,ex,b)=>(r.strSets===2&&b.pair)?2:ex.sets;
 const wUnit=r=>r.wUnit==='kg'?'kg':'lb';
-function lastEx(r,k,id){
+const LB_KG=0.45359237;
+// weights are saved with the unit they were entered in and converted for display
+const wIn=(e,wu)=>{if(!e||e.w==null)return null;const from=e.u||'lb';const v=from===wu?e.w:(wu==='kg'?e.w*LB_KG:e.w/LB_KG);return Math.round(v*2)/2};
+function lastEx(r,k,id,v){
   const logs=r.logs||{};
-  const prev=Object.keys(logs).filter(d=>d<k&&logs[d]&&logs[d].ex&&logs[d].ex[id]&&(logs[d].ex[id].w!=null||logs[d].ex[id].r!=null)).sort();
+  const hit=d=>{const e=logs[d]&&logs[d].ex&&logs[d].ex[id];return e&&(e.v||0)===v&&(e.w!=null||e.r!=null)};
+  const prev=Object.keys(logs).filter(d=>d<k&&hit(d)).sort();
   if(!prev.length) return null;
   const d=prev[prev.length-1];return {date:d,...logs[d].ex[id]};
 }
@@ -569,17 +591,17 @@ function strengthCard(r,k,own){
   const blocks=STRENGTH.map(b=>{
     if(!b.ex) return `<div class="sblock"><div class="sb-h"><b>${b.block}</b><span class="muted">${b.time}</span></div><p class="muted">${b.note}</p></div>`;
     const rows=b.ex.map(ex=>{
-      const e=E[ex.id]||{}, v=e.v||0, sets=exSets(r,ex,b), last=lastEx(r,k,ex.id);
-      const ready=last&&last.r>=ex.top&&last.s>=sets&&ex.w&&(last.v||0)===v;
-      const lastTxt=last?`Last (${fmtDate(parse(last.date))}): ${last.w!=null&&ex.w?last.w+' '+wu+' × ':''}${last.r!=null?last.r+(ex.unit==='sec'?' sec':''):'–'}${last.s!=null?` · ${last.s}/${sets} sets`:''}`:'';
+      const e=E[ex.id]||{}, v=e.v||0, sets=exSets(r,ex,b), last=lastEx(r,k,ex.id,v), lw=wIn(last,wu), ew=wIn(e,wu);
+      const ready=last&&last.r>=ex.top&&last.s>=sets&&ex.w;
+      const lastTxt=last?`Last (${fmtDate(parse(last.date))}): ${lw!=null&&ex.w?lw+' '+wu+' × ':''}${last.r!=null?last.r+(ex.unit==='sec'?' sec':''):'–'}${last.s!=null?` · ${last.s}/${sets} sets`:''}`:'';
       const name=ex.opts[v];
-      if(!own) return `<div class="exr"><div class="ex-n"><b>${esc(name)}</b><small>${sets} × ${ex.reps}</small></div>${e.r!=null||e.w!=null?`<small class="muted">Logged: ${e.w!=null&&ex.w?e.w+' '+wu+' × ':''}${e.r??'–'}${e.s!=null?` · ${e.s}/${sets} sets`:''}</small>`:''}</div>`;
+      if(!own) return `<div class="exr"><div class="ex-n"><b>${esc(name)}</b><small>${sets} × ${ex.reps}</small></div>${e.r!=null||e.w!=null?`<small class="muted">Logged: ${ew!=null&&ex.w?ew+' '+wu+' × ':''}${e.r??'–'}${e.s!=null?` · ${e.s}/${sets} sets`:''}</small>`:''}</div>`;
       return `<div class="exr">
         <div class="ex-n"><b>${esc(name)}</b><small>${sets} × ${ex.reps}</small></div>
         ${ex.opts.length>1?`<label class="ex-sub"><small>Swap for</small><select data-exv="${ex.id}" id="exv-${ex.id}">${ex.opts.map((o,i)=>`<option value="${i}" ${i===v?'selected':''}>${esc(o)}</option>`).join('')}</select></label>`:''}
         ${last?`<small class="ex-last ${ready?'ready':''}">${esc(lastTxt)}${ready?' · Ready to add the smallest weight step':''}</small>`:''}
         <div class="ex-in">
-          ${ex.w?`<label for="exw-${ex.id}"><small>Weight (${wu})</small><input type="number" inputmode="decimal" step="0.5" min="0" id="exw-${ex.id}" data-exw="${ex.id}" value="${e.w??''}" placeholder="${last&&last.w!=null?last.w:''}"></label>`:''}
+          ${ex.w?`<label for="exw-${ex.id}"><small>Weight (${wu})</small><input type="number" inputmode="decimal" step="0.5" min="0" id="exw-${ex.id}" data-exw="${ex.id}" value="${ew??''}" placeholder="${lw??''}"></label>`:''}
           <label for="exr-${ex.id}"><small>${ex.unit==='sec'?'Seconds':'Reps'}${ex.unit!=='sec'&&/side/.test(ex.reps)?' per side':''}</small><input type="number" inputmode="numeric" min="0" id="exr-${ex.id}" data-exr="${ex.id}" value="${e.r??''}" placeholder="${last&&last.r!=null?last.r:''}"></label>
           <div class="ex-sets"><small>Sets done</small><div class="rts">${Array.from({length:sets+1},(_,i)=>`<button type="button" class="rt" data-exs="${ex.id}" data-v="${i}" aria-pressed="${e.s===i}">${i}</button>`).join('')}</div></div>
         </div>
@@ -598,8 +620,9 @@ function strengthCard(r,k,own){
 }
 function bindStrength(r,k){
   const put=(id,f,v)=>saveMine({logs:{[k]:{ex:{[id]:{[f]:v}}}}});
-  view.querySelectorAll('[data-exv]').forEach(s=>s.onchange=()=>put(s.dataset.exv,'v',+s.value));
-  view.querySelectorAll('[data-exw]').forEach(i=>i.onchange=()=>put(i.dataset.exw,'w',i.value===''?null:+i.value));
+  // a different variation starts its own record for today
+  view.querySelectorAll('[data-exv]').forEach(s=>s.onchange=()=>saveMine({logs:{[k]:{ex:{[s.dataset.exv]:{v:+s.value,w:null,u:null,r:null,s:null}}}}}));
+  view.querySelectorAll('[data-exw]').forEach(i=>i.onchange=()=>saveMine({logs:{[k]:{ex:{[i.dataset.exw]:i.value===''?{w:null,u:null}:{w:+i.value,u:wUnit(r)}}}}}));
   view.querySelectorAll('[data-exr]').forEach(i=>i.onchange=()=>put(i.dataset.exr,'r',i.value===''?null:+i.value));
   view.querySelectorAll('[data-exs]').forEach(b=>b.onclick=()=>{const id=b.dataset.exs,v=+b.dataset.v,cur=(((r.logs||{})[k]||{}).ex||{})[id]||{};put(id,'s',cur.s===v?null:v)});
 }
@@ -649,7 +672,7 @@ function renderToday(){
   const N=runnerNow(r), {t,cw,pw,notStarted,mon}=N;
   const head=`${banners()}${!mine()?joinCard():''}${whoBar()}`;
   if(N.finished){
-    view.innerHTML=`<div class="stack">${head}<div class="card session t-run"><span class="chip">Program complete</span><h2>10 miles: done</h2><p class="muted">All 27 weeks finished. Keep 2–3 easy runs a week plus strength to hold your fitness.</p></div>${timeline(r,TOTAL)}</div>`;
+    view.innerHTML=`<div class="stack">${head}<div class="card session t-run"><span class="chip">Program complete</span><h2>${esc(RACE_CFG.name)}: done</h2><p class="muted">All 27 weeks finished. For the first week after the race, stick to easy walks, light cross-training and mobility, and go for your first easy run once your legs feel normal. After that, 2–3 easy runs a week plus strength will hold your fitness until you pick a new goal.</p></div>${timeline(r,TOTAL)}</div>`;
     bindWho();bindJoin();return;
   }
   const {wk,days,raceWeek,moved}=weekDays(pw,r,mon);
@@ -663,12 +686,14 @@ function renderToday(){
   let title=day.title, sub=day.detail, body='', primary='', P=null;
   const snap=L.planned;
   if(day.type==='run'){
-    const ru=day.run; P=planFor(ru,r,key);
-    title=snap&&statusOf(L)?snap.title:P.title; sub=P.sub;
+    const ru=day.run; const Pcur=planFor(ru,r,key);
+    // once logged, everything shown comes from the prescription saved at that moment
+    P=(snap&&statusOf(L)&&snap.sub)?{...Pcur,...snap,fallback:'',cur:Pcur}:{...Pcur,cur:Pcur};
+    title=P.title; sub=P.sub;
     const effort=ru.kind==='interval'?EFFORT.interval:ru.kind==='race'||ru.kind==='goal'?EFFORT.goal:EFFORT.easy;
     body=`<div class="meta">${P.meta.map(([a,b])=>`<div><span class="eyebrow">${a}</span><b>${esc(b)}</b></div>`).join('')}<div><span class="eyebrow">Effort</span><b class="word">${effort}</b></div></div>
-      ${P.est&&!(snap&&statusOf(L)&&snap.title!==P.title)?`<p class="est">${esc(P.est)}</p>`:''}${P.fallback?`<p class="hint">${esc(P.fallback)}</p>`:''}
-      ${snap&&statusOf(L)&&snap.title!==P.title?`<p class="hint">Target saved when you logged this. Current settings would show: ${esc(P.title)}.</p>`:''}`;
+      ${P.est?`<p class="est">${esc(P.est)}</p>`:''}${P.fallback?`<p class="hint">${esc(P.fallback)}</p>`:''}
+      ${snap&&statusOf(L)&&snap.sub&&(snap.title!==P.cur.title||snap.sub!==P.cur.sub)?`<p class="hint">Showing the workout as it was when you logged it. Current settings would show: ${esc(P.cur.title)}.</p>`:''}`;
     if(ru.kind==='interval'){
       body+=`<div class="segbar" aria-hidden="true">${P.segs.map(s=>`<span class="s-${s[0]}" style="flex:${s[1]}"></span>`).join('')}</div>
       <div class="legend"><span><i class="s-run"></i>Run</span><span><i class="s-walk"></i>Walk</span><span><i class="s-warm"></i>Warm-up / cool-down</span></div>
@@ -708,10 +733,10 @@ function renderToday(){
   }
   const actuals=own&&day.type==='run'&&isDone(L)?`<div class="actuals"><span class="eyebrow">What you actually did</span>
       <div class="ex-in">
-        <label for="f-dist"><small>Distance (${UNITS==='km'?'km':'mi'})</small><input type="number" inputmode="decimal" step="0.01" min="0" id="f-dist" value="${L.dist!=null?+unitNum(L.dist).toFixed(2):''}" placeholder="from watch, treadmill or route"></label>
-        <label for="f-dur"><small>Running time (min or h:mm:ss)</small><input type="text" inputmode="decimal" id="f-dur" value="${L.dur!=null?fmtClock(L.dur):''}" placeholder="e.g. 24:30"></label>
+        <label for="f-dist"><small>Running distance, excluding walking (${UNITS==='km'?'km':'mi'})</small><input type="number" inputmode="decimal" step="0.01" min="0" id="f-dist" value="${L.dist!=null?+unitNum(L.dist).toFixed(2):''}" placeholder="from watch, treadmill or route"></label>
+        <label for="f-dur"><small>Running time, excluding walking (min or h:mm:ss)</small><input type="text" inputmode="decimal" id="f-dur" value="${L.dur!=null?fmtClock(L.dur):''}" placeholder="e.g. 24:30"></label>
       </div>
-      ${L.dist>0&&L.dur>0?`<small class="muted">Your pace: ${fmtClock(UNITS==='km'?L.dur/(L.dist*1.609344):L.dur/L.dist)}/${UNITS==='km'?'km':'mile'}${Math.abs((paceOf(r)||0)-L.dur/L.dist)>3?` · <button type="button" class="linkbtn" id="usePace">Save as my comfortable pace</button>`:' · matches your saved pace'}</small>`:'<small class="muted">Optional. Measure with a watch, treadmill, or a route of known length.</small>'}
+      ${L.dist>0&&L.dur>0?`<small class="muted">Your pace: ${fmtClock(UNITS==='km'?L.dur/(L.dist*1.609344):L.dur/L.dist)}/${UNITS==='km'?'km':'mile'}${Math.abs((paceOf(r)||0)-L.dur/L.dist)>3?` · <button type="button" class="linkbtn" id="usePace">Save as my comfortable pace</button>`:' · matches your saved pace'}</small>`:'<small class="muted">Optional. Count only the running parts, not the warm-up, cool-down or walk breaks, so your pace stays accurate. Measure with a watch, treadmill, or a route of known length.</small>'}
     </div>`:'';
   const ro=!own&&day.type!=='rest'?`<p class="ro">${S==='skipped'?'Skipped':S==='modified'?'Done, modified'+(L.note?`: ${esc(L.note)}`:''):S?'Completed':'Not logged yet'}${L.dist!=null?` · ${fmtD(L.dist)}`:''}${L.dur!=null?` in ${fmtDurShort(L.dur)}`:''}${L.rpe!=null?` · effort ${L.rpe}/10`:''}${L.pain!=null?` · pain ${L.pain}/10`:''}${L.morning!=null?` · next morning ${L.morning}/10`:''}</p>`:'';
   const ratings=own&&day.type==='run'&&isDone(L)?`<div class="logs">
@@ -753,7 +778,7 @@ function renderToday(){
         <button class="btn small" id="holdRepeat">Repeat this week next week</button>
         <button class="btn small" id="holdBack">Step back one week</button>
         ${held?`<button class="btn small" id="holdUndo">Undo (${held} held)</button>`:''}
-      </div><p class="muted" style="font-size:.82rem">Each repeat pushes your finish one week later. ${scheduleDiff(r)<0?`You have ${plural(-scheduleDiff(r),'spare week')} before May 15.`:'You have no spare weeks before May 15; start earlier in Setup to build some.'}</p>`:''}
+      </div><p class="muted" style="font-size:.82rem">Each repeat pushes your finish one week later. ${scheduleDiff(r)<0?`You have ${plural(-scheduleDiff(r),'spare week')} before ${RACE_SHORT}.`:`You have no spare weeks before ${RACE_SHORT}; start earlier in Setup to build some.`}</p>`:''}
     </section>
     ${timeline(r,pw)}
   </div>`;
@@ -773,7 +798,7 @@ function renderToday(){
   view.querySelectorAll('[data-mv]').forEach(b=>b.onclick=()=>{const to=+b.dataset.mv;UI.moving=false;const from=UI.sel;UI.sel=to;saveMine({swaps:{[sk]:[...cur(),[from,to]]}})});
   const mr=document.getElementById('mvReset'); if(mr) mr.onclick=()=>{UI.moving=false;saveMine({swaps:{[sk]:[]}})};
   const nt=document.getElementById('f-note'); if(nt) nt.onchange=()=>saveMine({logs:{[key]:{note:nt.value.trim()}}});
-  const tb=document.getElementById('startTimer'); if(tb) tb.onclick=()=>openTimer(P.segs,P.title,key);
+  const tb=document.getElementById('startTimer'); if(tb) tb.onclick=()=>openTimer(P.segs||P.cur.segs,P.title,key);
   if(day.type==='strength') bindStrength(r,key);
   const fd=document.getElementById('f-dist'); if(fd) fd.onchange=()=>{const v=parseFloat(fd.value);saveMine({logs:{[key]:{dist:isFinite(v)&&v>0?(UNITS==='km'?v/1.609344:v):null}}})};
   const fu=document.getElementById('f-dur'); if(fu) fu.onchange=()=>{saveMine({logs:{[key]:{dur:parseDur(fu.value)}}})};
@@ -799,7 +824,10 @@ function renderToday(){
   const hb=document.getElementById('holdBack'); if(hb) hb.onclick=()=>saveMine({holds:[...holds(),cw,cw]});
   const hu=document.getElementById('holdUndo'); if(hu) hu.onclick=()=>{const h=holds(),i=h.lastIndexOf(cw);if(i>-1)h.splice(i,1);saveMine({holds:h})};
 }
-function setStatus(k,s){const cur=statusOf((mine().logs||{})[k]);const next=cur===s?null:s;saveMine({logs:{[k]:{status:next,done:next==='done'||next==='modified',planned:next?plannedSnapshot(mine(),k):null}}})}
+function setStatus(k,s){const L0=(mine().logs||{})[k]||{},cur=statusOf(L0);const next=cur===s?null:s;
+  const patch={status:next,done:next==='done'||next==='modified'};
+  if(!next) patch.planned=null; else if(!(cur&&L0.planned)) patch.planned=plannedSnapshot(mine(),k); // switching Done ↔ Modified keeps the original
+  saveMine({logs:{[k]:patch}})}
 function toggle(k){const s=statusOf((mine().logs||{})[k]);saveMine({logs:{[k]:s?{status:null,done:false,planned:null}:{status:'done',done:true,planned:plannedSnapshot(mine(),k)}}})}
 function parseDur(v){v=String(v||'').trim();if(!v)return null;if(/^\d+(\.\d+)?$/.test(v))return Math.round(parseFloat(v)*60);const p=v.split(':').map(Number);if(p.some(x=>!isFinite(x)))return null;return p.length===3?p[0]*3600+p[1]*60+p[2]:p[0]*60+(p[1]||0)}
 function timeline(r,pw){
@@ -840,15 +868,13 @@ function renderCrew(){
   }).join('');
   view.innerHTML=`<div class="stack">
     ${banners()}
-    <section class="card race">
-      <div><span class="eyebrow">Race day</span><h2 style="font-size:2rem">Sat, May 15, 2027</h2><p class="muted">10 miles. Plans that start Nov 9 finish on race morning.</p></div>
-      <div class="count">${days}<small>days to go</small></div>
-    </section>
+    ${raceCard()}
     ${joinCard()}
     ${!LOADED?'<p class="muted">Loading the Kru…</p>':ids.length?`<div class="crew">${cards}</div>`:'<p class="muted">Nobody has joined yet. Join above, then share this page with your Kru.</p>'}
     ${LOADED&&!LOCAL?'<p class="muted" style="font-size:.82rem">Everyone with the link sees each other\'s plans and logs. Refreshes every minute.</p>':''}
   </div>`;
   bindJoin();
+  document.getElementById('openRace').onclick=openRace;
   view.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{UI.who=b.dataset.open;UI.sel=null;UI.tab='today';render()});
 }
 // Most recent milestone reached through completed workouts, not the calendar.
@@ -879,13 +905,13 @@ function renderPlan(){
   const weekMon={};for(let cw=0;cw<80;cw++){const w=progWeekR(r,cw);if(w>=TOTAL)break;if(weekMon[w]==null)weekMon[w]=addDays(startMonR(r),cw*7)}
   view.innerHTML=`<div class="stack" style="gap:20px">
     ${whoBar()}
-    <p class="muted" style="max-width:65ch">${viewing()?esc(nameOf(UI.who))+': ':''}${r.runDays} runs a week on ${runDow.join(', ')}. ${S0.cross.length?'Cross-training on '+nm(S0.cross)+', s':'S'}trength on ${nm(S0.strength)}. Each run shows ${(r.target||'time')==='distance'?'running distance':'running time'}, then total time including the warm-up and cool-down walks.${paceOf(r)?'':' Save a comfortable pace in Setup to see estimates.'} Race week is fixed for everyone: runs on Tue${r.runDays===3?', Thu':''} and the race on Saturday.</p>
+    <p class="muted" style="max-width:65ch">${viewing()?esc(nameOf(UI.who))+': ':''}${r.runDays} runs a week on ${runDow.join(', ')}. ${S0.cross.length?'Cross-training on '+nm(S0.cross)+', s':'S'}trength on ${nm(S0.strength)}. Each run shows ${(r.target||'time')==='distance'?'running distance':'running time'}, then total time including the warm-up and cool-down walks.${paceOf(r)?'':' Save a comfortable pace in Setup to see estimates.'} Race week is fixed for everyone: easy runs on ${raceWeekRuns(r.runDays).slice(0,-1).map(d=>DOW[d]).join(' and ')}, then the race on ${RACE_DAYNAME}.</p>
     ${PHASES.map((p,pi)=>{
       if(STARTS[pi]+p.weeks<=STARTS[r.entry]) return `<section class="phase"><header><h2 class="muted">${p.name}</h2><span class="muted" style="font-size:.88rem">Skipped: starting at ${PHASES[r.entry].name}</span></header></section>`;
       const here=focus>=STARTS[pi]&&focus<STARTS[pi]+p.weeks, done=focus>=STARTS[pi]+p.weeks;
       let rows='';
       for(let w=STARTS[pi];w<STARTS[pi]+p.weeks;w++){
-        const wk=weekInfo(w), rs=pickRuns(wk.runs,r.runDays), m=weekMon[w], runDow=w===TOTAL-1?(r.runDays===3?['Tue','Thu','Sat']:['Tue','Sat']):runDowBase;
+        const wk=weekInfo(w), rs=pickRuns(wk.runs,r.runDays), m=weekMon[w], runDow=w===TOTAL-1?raceWeekRuns(r.runDays).map(d=>DOW[d]):runDowBase;
         const Ps=rs.map(x=>planFor(x,r,null)), dm=Ps.every(q=>q.mode==='distance');
         const tot=dm?`Week: ${fmtD(Ps.reduce((a,q)=>a+(q.mi||(q.segs?q.segs.reduce((m,z)=>m+(z[2]||0),0)/MI_M:0)),0))} running`:`Week: ${+(Ps.reduce((a,q)=>a+(q.runSec||0),0)/60).toFixed(1)} min running`;
         rows+=`<div class="wrow ${w<cur?'past':''} ${w===cur?'cur':''}">
@@ -916,7 +942,7 @@ function renderGuide(){
   view.innerHTML=`<div class="stack" style="gap:22px">
   <section class="card"><div class="prose">
     <h2>How the program works</h2>
-    <p>Three phases, 27 weeks, timed to finish on race day, Saturday May 15: Couch → 5K (9 weeks of run/walk intervals), 5K → 10K (8 weeks), and 10K → 10 miles (10 weeks). Each week has 2 or 3 runs, never on back-to-back days, plus 2–3 days of cross-training and strength.</p>
+    <p>Three phases, 27 weeks, timed to finish on race day, ${RACE_LONG}: Couch → 5K (9 weeks of run/walk intervals), 5K → 10K (8 weeks), and 10K → 10 miles (10 weeks). Each week has 2 or 3 runs, never on back-to-back days, plus 2–3 days of cross-training and strength.</p>
     <p>Weekly running volume rises gradually, with cutback weeks built in. Large week-to-week jumps in running distance are associated with a higher risk of running-related injury, so the plan avoids them. Couch → 5K is measured in time: it builds to 30 minutes of running, which is a different distance for each person. Later phases are written in distance; with a comfortable pace saved, you can see any run as time or distance. Repeating a week is part of the plan; start a week or two before Nov 9 if you want buffer for holidays or illness.</p>
   </div></section>
 
@@ -1007,7 +1033,7 @@ function renderSetup(){
   view.innerHTML=`<div class="stack">${banners()}<section class="card" style="gap:22px">
     <h2>Your setup</h2>
     ${LOCAL?'':`<label class="field" for="f-name"><span>Name shown to the Kru</span><input type="text" id="f-name" maxlength="24" value="${esc(r.name||'')}" style="font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);max-width:320px"></label>`}
-    <div class="field"><span>Start at</span>${seg('entry',[[0,'Couch → 5K'],[1,'5K → 10K'],[2,'10K → 10 mi']])}<small>Changing this resets your start date so the plan still ends on May 15.</small></div>
+    <div class="field"><span>Start at</span>${seg('entry',[[0,'Couch → 5K'],[1,'5K → 10K'],[2,'10K → 10 mi']])}<small>Changing this resets your start date so the plan still ends on race day, ${RACE_SHORT}.</small></div>
     <label class="field" for="f-start"><span>Start date</span><input type="date" id="f-start" value="${r.start}"><small>${aligned?'Race-aligned: your last week is race week.':`Race-aligned start would be ${fmtDate(parse(defaultStart(r.entry)))}.`} Starting earlier banks buffer weeks for holidays or illness.</small>${aligned?'':`<button class="btn small" id="alignStart" style="width:max-content">Use race-aligned start</button>`}</label>
     <div class="field"><span>Run days per week</span>${seg('runDays',[[3,'3 runs + 2 cross'],[2,'2 runs + 3 cross']])}<small>Changing this resets your training days to the default.</small></div>
     ${schedEditor(r)}
@@ -1060,7 +1086,7 @@ function schedEditor(r){
     <div class="actions"><button type="button" class="btn small" id="schedPreset">Use 2 strength days (Mon, Wed)</button><button type="button" class="btn small" id="schedDefault">Default (strength Fri)</button></div>
     ${prob?`<p class="warnline" role="alert">${esc(prob)}</p>`:''}
     ${dirtyS?`<div class="actions"><button class="btn primary small" id="schedSave" ${prob?'disabled':''}>Save training days</button><button class="btn small" id="schedCancel">Cancel</button></div><small>If you've already logged something this week, new days start next Monday.</small>`:UI.schedMsg?`<small role="status" style="color:var(--ok)">${esc(UI.schedMsg)}</small>`:''}
-    <small>Race week is the same for everyone so you all race on Saturday, May 15.</small></div>`;
+    <small>Race week is the same for everyone so you all race on ${RACE_DAYNAME}, ${RACE_SHORT}.</small></div>`;
 }
 function bindSched(r){
   view.querySelectorAll('[data-sd]').forEach(b=>b.onclick=()=>{
@@ -1083,6 +1109,79 @@ function bindSched(r){
   const sc=document.getElementById('schedCancel'); if(sc) sc.onclick=()=>{UI.schedDraft=null;render()};
 }
 
+/* ---------- race details + finish-time estimate ---------- */
+const daysToRace=()=>Math.max(0,dayNum(RACE_DATE)-dayNum(today()));
+function raceCard(){
+  const d=daysToRace();
+  return `<button type="button" class="card race racebtn" id="openRace" aria-label="Open race details">
+    <div><span class="eyebrow">Next up · race day</span><h2 style="font-size:2rem">${esc(RACE_CFG.name)}</h2><p class="muted">${esc(RACE_LONG)} · ${RACE_CFG.miles} miles · ${esc(RACE_CFG.city)}</p><span class="more-link">Race details, course and your Kru's race plans →</span></div>
+    <div class="count">${d}<small>day${d===1?'':'s'} to go</small></div></button>`;
+}
+// moving time for a run/walk strategy over the race distance, plus stops
+function finishEstimate(e){
+  const miles=RACE_CFG.miles, p=e.pace, q=e.walkPace||1020, R=(e.run||0)*60, Wk=(e.walk||0)*60;
+  if(!p) return null;
+  let moving;
+  if(!Wk) moving=miles*p;
+  else{const per=R/p+Wk/q; if(per<=0) return null; moving=miles/per*(R+Wk)}
+  const total=moving+(e.stops||0)*60;
+  return {total,avg:total/miles};
+}
+function longestRun(r){let best=0;Object.values(r.logs||{}).forEach(L=>{if(isDone(L)&&L.dist>best)best=L.dist});return best}
+function renderRace(){
+  const me=mine(), saved=(me&&me.racePlan)||{};
+  if(!UI.raceDraft) UI.raceDraft={pace:saved.pace||(me&&paceOf(me))||null,run:saved.run??9,walk:saved.walk??1,walkPace:saved.walkPace||1020,stops:saved.stops??2};
+  const D=UI.raceDraft, est=finishEstimate(D), lim=RACE_CFG.limitSec, limPace=lim/RACE_CFG.miles;
+  const u=UNITS==='km'?'km':'mile', perU=sec=>UNITS==='km'?sec/1.609344:sec;
+  let verdict='';
+  if(est){const diff=lim-est.total;
+    const mins=Math.round(Math.abs(diff)/60);
+    verdict=diff>=600?`<p class="verdict ok">About ${plural(mins,'minute')} inside the 2½-hour limit.</p>`:diff>=0?`<p class="verdict warn">Only about ${plural(mins,'minute')} inside the 2½-hour limit. That's a thin margin if the day runs warm or the start is crowded; aim for at least 10 minutes of cushion.</p>`
+      :`<p class="verdict bad">About ${plural(mins,'minute')} over the 2½-hour limit. Build more running into your plan, cut stop time, or adjust the run/walk ratio.</p>`}
+  const plans=orderedIds().map(id=>{const r=RUNNERS[id],rp=r.racePlan,e=rp&&finishEstimate(rp),lr=longestRun(r);
+    return `<div class="rp"><span class="nm"><span class="av" style="--c:${colorOf(id)}">${esc(initial(nameOf(id)))}</span><b>${esc(nameOf(id))}</b>${id===ME?'<span class="muted" style="font-size:.8rem">you</span>':''}</span>
+      <span class="muted">${rp?`${rp.walk?`Run ${rp.run} min / walk ${rp.walk} min`:'Run continuously'} · ${rp.stops?rp.stops+' min of stops · ':''}<b class="mono">~${fmtClock(e.total)}</b> finish`:'No race plan yet'}${lr?` · longest logged run ${fmtD(lr)}`:''}</span></div>`}).join('');
+  const paceInput=(id,val,ph)=>`<input type="text" inputmode="numeric" id="${id}" value="${val?fmtClock(perU(val)):''}" placeholder="${ph}">`;
+  view.innerHTML=`<div class="stack">
+    <div><button type="button" class="btn small" id="raceBack">← Back</button></div>
+    <section class="card race"><div><span class="eyebrow">Next up</span><h2 style="font-size:2rem">${esc(RACE_CFG.name)}</h2><p class="muted">${esc(RACE_LONG)} · ${esc(RACE_CFG.city)}</p></div><div class="count">${daysToRace()}<small>days to go</small></div></section>
+    <section class="card"><h3>Race details</h3>
+      <div class="tbl"><table>
+        <tr><th>Distance</th><td>${RACE_CFG.miles} miles (about ${(RACE_CFG.miles*1.609344).toFixed(1)} km)</td></tr>
+        <tr><th>Start</th><td>${esc(RACE_CFG.start)}</td></tr>
+        <tr><th>Start window</th><td>${esc(RACE_CFG.startWindow)}</td></tr>
+        <tr><th>Finish</th><td>${esc(RACE_CFG.finish)}</td></tr>
+        <tr><th>Course highlights</th><td>${esc(RACE_CFG.highlights)}</td></tr>
+        <tr><th>Aid stations</th><td>${esc(RACE_CFG.aid)}</td></tr>
+        <tr><th>Time limit</th><td>2½ hours, an average of ${fmtClock(limPace)} per mile${UNITS==='km'?` (${fmtClock(perU(limPace))} per km)`:''}</td></tr>
+        <tr><th>Packet pickup</th><td>${esc(RACE_CFG.pickup)}</td></tr>
+      </table></div>
+      <p class="muted" style="font-size:.86rem">Detailed race-week logistics are posted closer to the event. Always check the official page for the latest.</p>
+      <div class="actions"><a class="btn small" href="${RACE_CFG.links.race}" target="_blank" rel="noopener">Official race &amp; course page</a><a class="btn small" href="${RACE_CFG.links.register}" target="_blank" rel="noopener">Register</a></div>
+    </section>
+    <section class="card"><h3>Finish-time estimate</h3>
+      <p class="muted" style="font-size:.9rem">Combines running, walk breaks and stops (aid stations, restroom). It's a planning estimate; race-day conditions vary.</p>
+      <div class="ex-in">
+        <label for="re-pace"><small>Running pace (per ${u})</small>${paceInput('re-pace',D.pace,'e.g. 12:00')}</label>
+        <label for="re-run"><small>Run (min)</small><input type="number" inputmode="numeric" min="1" id="re-run" value="${D.run}"></label>
+        <label for="re-walk"><small>Then walk (min, 0 = none)</small><input type="number" inputmode="decimal" min="0" step="0.5" id="re-walk" value="${D.walk}"></label>
+        <label for="re-wpace"><small>Walking pace (per ${u})</small>${paceInput('re-wpace',D.walkPace,'17:00')}</label>
+        <label for="re-stops"><small>Stops in total (min)</small><input type="number" inputmode="numeric" min="0" id="re-stops" value="${D.stops}"></label>
+      </div>
+      ${est?`<div class="meta"><div><span class="eyebrow">Estimated finish</span><b>${fmtClock(est.total)}</b></div><div><span class="eyebrow">Average pace</span><b>${fmtClock(perU(est.avg))}/${u}</b></div></div>${verdict}`:'<p class="hint">Enter a running pace to see an estimate. Your comfortable pace from Setup fills in automatically.</p>'}
+      ${me&&est?`<div class="actions"><button type="button" class="btn primary small" id="reSave">Save as my race plan</button>${me.racePlan?'<span class="muted" style="font-size:.82rem">Shared with your Kru</span>':''}</div>`:''}
+    </section>
+    <section class="card"><h3>Your Kru's race plans</h3>${plans||'<p class="muted">Nobody has joined yet.</p>'}</section>
+  </div>`;
+  document.getElementById('raceBack').onclick=()=>{UI.tab=UI.prevTab||'crew';UI.raceDraft=null;render()};
+  const num=(id,k)=>{const el=document.getElementById(id);el.onchange=()=>{const v=parseFloat(el.value);D[k]=isFinite(v)&&v>=0?v:D[k];render()}};
+  num('re-run','run');num('re-walk','walk');num('re-stops','stops');
+  const pc=(id,k)=>{const el=document.getElementById(id);el.onchange=()=>{const sec=parseDur(el.value.includes(':')?el.value:el.value+':00');if(sec&&sec>=180&&sec<=2400){D[k]=Math.round(UNITS==='km'?sec*1.609344:sec)}render()}};
+  pc('re-pace','pace');pc('re-wpace','walkPace');
+  const sv=document.getElementById('reSave'); if(sv) sv.onclick=()=>{saveMine({racePlan:{pace:D.pace,run:D.run,walk:D.walk,walkPace:D.walkPace,stops:D.stops}})};
+}
+function openRace(){if(UI.tab!=='race')UI.prevTab=UI.tab;UI.tab='race';UI.raceDraft=null;render();window.scrollTo(0,0)}
+
 /* ---------- timer ---------- */
 const TEL=document.getElementById('timer');
 let T=null, ac=null, lock=null, iv=null;
@@ -1091,31 +1190,33 @@ const mmss=s=>{s=Math.max(0,Math.ceil(s));return Math.floor(s/60)+':'+pad(s%60)}
 function beep(f,dur,at){if(!ac)return;const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=f;o.connect(g);g.connect(ac.destination);const t=ac.currentTime+(at||0);g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(.4,t+.02);g.gain.exponentialRampToValueAtTime(.0001,t+dur);o.start(t);o.stop(t+dur+.05)}
 function cue(type){if(type==='run'){beep(880,.18);beep(880,.18,.25);try{navigator.vibrate&&navigator.vibrate([200,100,200])}catch(e){}}else{beep(520,.4);try{navigator.vibrate&&navigator.vibrate(400)}catch(e){}}}
 function openTimer(segs,title,key){
-  T={segs,title,key,idx:0,el:0,running:false,last:0,total:segs.reduce((a,s)=>a+s[1],0),logged:false};
+  T={segs,title,key,idx:0,el:0,running:false,last:0,total:segs.reduce((a,s)=>a+s[1],0),logged:false,actual:[]};
   TEL.hidden=false;document.body.style.overflow='hidden';drawTimer();
 }
 function closeTimer(){T&&(T.running=false);clearInterval(iv);TEL.hidden=true;document.body.style.overflow='';try{lock&&lock.release()}catch(e){}lock=null;render()}
 function tick(){
   if(!T||!T.running)return;const now=performance.now();T.el+=(now-T.last)/1000;T.last=now;
-  while(T.idx<T.segs.length&&T.segs[T.idx][2]==null&&T.el>=T.segs[T.idx][1]){T.el-=T.segs[T.idx][1];T.idx++;if(T.idx<T.segs.length)cue(T.segs[T.idx][0]);}
+  while(T.idx<T.segs.length&&T.segs[T.idx][2]==null&&T.el>=T.segs[T.idx][1]){T.el-=T.segs[T.idx][1];T.actual.push(T.segs[T.idx][1]);T.idx++;if(T.idx<T.segs.length)cue(T.segs[T.idx][0]);}
   if(T.idx>=T.segs.length){T.running=false;clearInterval(iv);beep(660,.2);beep(880,.2,.25);beep(1100,.35,.5);
-    if(!T.logged&&mine()){T.logged=true;saveMine({logs:{[T.key]:{done:true,status:'done',planned:plannedSnapshot(mine(),T.key)}}})}}
+    if(!T.logged&&mine()){T.logged=true;{const L0=(mine().logs||{})[T.key]||{};saveMine({logs:{[T.key]:{done:true,status:statusOf(L0)||'done',...(L0.planned&&statusOf(L0)?{}:{planned:plannedSnapshot(mine(),T.key)})}}})}}}
   drawTimer();
 }
 function drawTimer(){
   const done=T.idx>=T.segs.length, s=done?null:T.segs[T.idx];
-  const elapsed=T.segs.slice(0,T.idx).reduce((a,x)=>a+x[1],0)+(done?0:T.el);
+  // real time spent (distance segments take as long as they take) vs. plan position for the bar
+  const elapsed=T.actual.reduce((a,x)=>a+x,0)+(done?0:T.el);
+  const planPos=T.segs.slice(0,T.idx).reduce((a,x)=>a+x[1],0)+(done?0:Math.min(T.el,s[1]));
   const type=done?'run':s[0], tc=type==='run'?'var(--run)':'var(--walk)';
   const next=T.segs[T.idx+1];
   TEL.innerHTML=`<div class="inner">
     <div class="row"><span class="eyebrow">${esc(T.title)}</span><button class="btn small" id="tClose">Close</button></div>
     <div class="center">
       <div class="phase-name" style="--tc:${done?'var(--ok)':tc}">${done?'Done':LABEL[type]}</div>
-      ${!done&&s[2]!=null?`<div class="clock" style="font-size:clamp(3rem,16vw,6rem)">${fmtSegM(s[2])}</div><p class="mono muted">${mmss(T.el)} so far · about ${mmss(s[1])} at your pace</p>`:`<div class="clock">${done?mmss(T.total):mmss(s[1]-T.el)}</div>`}
+      ${!done&&s[2]!=null?`<div class="clock" style="font-size:clamp(3rem,16vw,6rem)">${fmtSegM(s[2])}</div><p class="mono muted">${mmss(T.el)} so far · about ${mmss(s[1])} at your pace</p>`:`<div class="clock">${done?mmss(elapsed):mmss(s[1]-T.el)}</div>`}
       <p class="muted">${done?'Session logged as complete. Cool down and stretch.':next?`Next: ${LABEL[next[0]]} ${next[2]!=null?fmtSegM(next[2]):mmss(next[1])}`:'Last segment'}</p>
     </div>
-    <div class="prog"><div class="segbar" style="height:18px">${T.segs.map(x=>`<span class="s-${x[0]}" style="flex:${x[1]}"></span>`).join('')}</div><div class="cursor" style="left:calc(${elapsed/T.total*100}% - 1px)"></div></div>
-    <div class="row mono muted" style="font-size:.85rem"><span>${mmss(elapsed)} elapsed</span><span>Segment ${Math.min(T.idx+1,T.segs.length)} / ${T.segs.length}</span><span>${mmss(T.total-elapsed)} left</span></div>
+    <div class="prog"><div class="segbar" style="height:18px">${T.segs.map(x=>`<span class="s-${x[0]}" style="flex:${x[1]}"></span>`).join('')}</div><div class="cursor" style="left:calc(${planPos/T.total*100}% - 1px)"></div></div>
+    <div class="row mono muted" style="font-size:.85rem"><span>${mmss(elapsed)} elapsed</span><span>Segment ${Math.min(T.idx+1,T.segs.length)} / ${T.segs.length}</span><span>${done?'':'~'+mmss(T.total-planPos)+' left'}</span></div>
     <div class="actions">${done?`<button class="btn primary" id="tFinish">Log effort</button>`:`<button class="btn primary" id="tPlay">${T.running?'Pause':elapsed>0?'Resume':'Start'}</button>${s[2]!=null?`<button class="btn primary" id="tSkip">Done with this run</button>`:'<button class="btn" id="tSkip">Skip segment</button>'}`}</div>
   </div>`;
   document.getElementById('tClose').onclick=closeTimer;
@@ -1129,7 +1230,7 @@ function drawTimer(){
     else clearInterval(iv);
     drawTimer();
   };
-  const k=document.getElementById('tSkip'); if(k) k.onclick=()=>{const cur=T.segs[T.idx];T.el=0;T.idx++;if(T.idx<T.segs.length)cue(T.segs[T.idx][0]);T.last=performance.now();const r=T.running;T.running=true;tick();if(!r&&T.idx<T.segs.length)T.running=false;drawTimer()};
+  const k=document.getElementById('tSkip'); if(k) k.onclick=()=>{T.actual.push(T.el);T.el=0;T.idx++;if(T.idx<T.segs.length)cue(T.segs[T.idx][0]);T.last=performance.now();const r=T.running;T.running=true;tick();if(!r&&T.idx<T.segs.length)T.running=false;drawTimer()};
 }
 
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{UI.tab=b.dataset.tab;store.set('c10-tab',UI.tab);ERR='';render()});

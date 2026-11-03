@@ -1,6 +1,6 @@
-# Couch to 10 Miles
+# RunningKru
 
-Shared training app for the May 15, 2027 10-mile race. It's a plain website hosted free on GitHub Pages. Everyone's plans and workouts save to a Google Sheet you own. Nobody needs an account. Each person joins once on their phone, and that phone gets a private key so nobody else can log as them.
+Train together. Run your race. Shared training app; the current goal is the Colfax Urban 10 Miler on Sunday, May 16, 2027. It's a plain website hosted free on GitHub Pages. Everyone's plans and workouts save to a Google Sheet you own. Nobody needs an account. Each person joins once on their phone, and that phone gets a private key so nobody else can log as them.
 
 ## Files
 
@@ -23,7 +23,7 @@ At this point the app works, but it only saves on each phone.
 
 ## 2. Connect the Google Sheet (5 min)
 
-1. Create a new Google Sheet at sheets.new and name it **Couch to 10 Miles – Kru**.
+1. Create a new Google Sheet at sheets.new and name it **RunningKru – Kru**.
 2. Click **Extensions → Apps Script**. Delete the sample code, paste in all of `Code.gs`, and click the **Save** icon.
 3. Click **Deploy → New deployment**. Click the gear icon next to *Select type* and choose **Web app**.
    - Execute as: **Me**
@@ -52,6 +52,10 @@ At this point the app works, but it only saves on each phone.
 Uploading `Code.gs` to GitHub doesn't change the script Google runs. To update it:
 1. In the Sheet, go to **Extensions → Apps Script** and replace all the code with the new `Code.gs`. Save.
 2. Go to **Deploy → Manage deployments**, click the pencil, set **Version: New version**, and click **Deploy**. This keeps the same `/exec` URL, so `config.js` doesn't change.
+
+## Changing the goal race
+
+The race lives in one place: `RACE_CFG` near the top of `app.js` (name, date, distance, start, finish, aid stations, time limit, links). Change it there and every date, label, countdown and race week follows. Plans count back from the race week, so update start dates in Setup if the race week moves.
 
 ## Good to know
 
