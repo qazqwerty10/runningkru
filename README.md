@@ -16,7 +16,7 @@ Shared training app for the May 15, 2027 10-mile race. It's a plain website host
 1. Sign in at github.com and click **+ → New repository**. Name it `couch-to-10`, set it to **Public** (free Pages hosting needs that), and click **Create repository**.
 2. On the empty repo page, click **uploading an existing file**. Drag in every file from this folder **except `Code.gs`**, then click **Commit changes**.
 3. Go to **Settings → Pages**. Under *Branch*, choose `main` and `/ (root)`, then click **Save**.
-4. After a minute, your link appears at the top of that page: `https://YOUR-USERNAME.github.io/couch-to-10/`.
+4. After a minute, your link appears at the top of that page: `https://qazqwerty10.github.io/couch-to-10/`.
 
 At this point the app works, but it only saves on each phone.
 
