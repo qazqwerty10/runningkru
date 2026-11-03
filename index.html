@@ -165,7 +165,7 @@ input[type=date]{font:inherit;padding:8px 10px;border:1px solid var(--line);bord
 .sync[data-state="saving"]::before{background:var(--warn)}
 .sync[data-state="offline"]::before{background:var(--bad)}
 .sync[data-state="local"]::before{background:var(--rest)}
-/* crew */
+/* Kru */
 .who{display:flex;flex-wrap:wrap;gap:6px}
 .who button{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:5px 12px 5px 6px;font-weight:600;font-size:.86rem}
 .who button[aria-pressed="true"]{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
@@ -229,6 +229,19 @@ details.phase[open]>summary{margin-bottom:8px}
 .tabs button{display:inline-flex;align-items:center;gap:6px}
 .tabs svg{width:17px;height:17px;flex:none}
 .tabs .gear span{display:none}
+.move{display:flex;flex-direction:column;gap:8px;align-items:flex-start;border-top:1px solid var(--line);padding-top:12px}
+.move .seg button{display:flex;flex-direction:column;align-items:flex-start;gap:0;line-height:1.2}
+.move .seg button small{font-weight:500;font-size:.72rem;color:var(--muted)}
+.move .seg button[disabled]{opacity:.4;cursor:not-allowed}
+.warnline{font-size:.86rem;color:var(--ink);background:var(--strength-soft);border-radius:8px;padding:8px 12px;margin:0}
+.keycode{font-family:var(--f-mono);font-size:1.05rem;letter-spacing:.06em;background:var(--walk-soft);padding:8px 12px;border-radius:8px;width:max-content;max-width:100%;overflow-wrap:anywhere}
+.sched{display:flex;flex-direction:column;gap:6px}
+.srow{display:grid;grid-template-columns:44px 1fr;gap:8px;align-items:center}
+.srow b{font-family:var(--f-display);text-transform:uppercase;font-size:1rem}
+.srow .seg button{padding:6px 10px;font-size:.8rem}
+.srow .seg button.s-run[aria-pressed="true"]{background:var(--run);border-color:var(--run);color:var(--on-accent)}
+.srow .seg button.s-cross[aria-pressed="true"]{background:var(--cross);border-color:var(--cross);color:var(--on-accent)}
+.srow .seg button.s-strength[aria-pressed="true"]{background:var(--strength);border-color:var(--strength);color:var(--on-accent)}
 @media (max-width:640px){
   .tabs{position:fixed;left:0;right:0;bottom:0;z-index:40;border-radius:0;border-width:1px 0 0;justify-content:space-around;
     padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px))}
@@ -253,7 +266,7 @@ details.phase[open]>summary{margin-bottom:8px}
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button role="tab" data-tab="today" id="tab-today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Today</span></button>
       <button role="tab" data-tab="plan" id="tab-plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg><span>Plan</span></button>
-      <button role="tab" data-tab="crew" id="tab-crew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><circle cx="17" cy="9.5" r="2.5"/><path d="M3 19c.6-3.3 3-5 6-5s5.4 1.7 6 5M15 14.6c2.6-.3 4.6 1.2 5.2 4.4"/></svg><span>Crew</span></button>
+      <button role="tab" data-tab="crew" id="tab-crew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><circle cx="17" cy="9.5" r="2.5"/><path d="M3 19c.6-3.3 3-5 6-5s5.4 1.7 6 5M15 14.6c2.6-.3 4.6 1.2 5.2 4.4"/></svg><span>Kru</span></button>
       <button role="tab" data-tab="guide" id="tab-guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h9a4 4 0 0 1 4 4v12H9a4 4 0 0 1-4-4z"/><path d="M9 9h5M9 13h5"/></svg><span>Guide</span></button>
       <button role="tab" data-tab="setup" id="tab-setup" class="gear" aria-label="Setup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Setup</span></button>
     </nav>

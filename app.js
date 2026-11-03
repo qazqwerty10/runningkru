@@ -79,24 +79,53 @@ function runDetail(r){
   return 'Easy pace (RPE 3–4/10): you can speak in full sentences.'+(r.strides?' Finish with 4 × 20 s relaxed strides, walking back to recover.':'');
 }
 
-function weekDays(w,n){
-  const wk=weekInfo(w), mins=['20–30','30–40','40–50'][wk.ph];
-  const cross={type:'cross',title:'Cross-train',detail:`${mins} min low-impact cardio: bike, elliptical, swim, rower, or incline walk at RPE 4–5/10. Builds the aerobic engine without extra impact load.`};
-  const strength={type:'strength',title:'Strength',detail:'Runner strength circuit (see Guide): calf raises, split squats, single-leg RDL, bridges, side plank. 2–3 sets; the last 2 reps of each set should feel hard. Optional 15–20 min easy cardio afterward.'};
-  const run=(r,t)=>({type:'run',title:t,run:r});
-  const k=wk.runs[2].kind;
-  const keyLabel=k==='race'?'Race day':k==='goal'?'Goal run':wk.ph===0?`Run ${n}`:'Long run';
-  const raceWeek=k==='race';
-  return {wk,days:[
-    {type:'rest',title:'Rest + mobility',detail:'Full rest, or 10 min of easy mobility: calves, hip flexors, hamstrings.'},
-    run(wk.runs[0],'Run 1'),
-    raceWeek?{type:'rest',title:'Rest',detail:'Rest or a 20 min easy walk. Nothing hard this week.'}:cross,
-    n===3?run(wk.runs[1],'Run 2'):(raceWeek?{type:'rest',title:'Rest',detail:'Rest. Lay out your race kit.'}:{...cross,detail:cross.detail+' In 2-run mode this replaces the middle run.'}),
-    raceWeek?{type:'rest',title:'Rest',detail:'Full rest before race day. Hydrate and eat a familiar dinner.'}:strength,
-    run(wk.runs[2],keyLabel),
-    {type:'rest',title:'Rest or easy cross',detail:raceWeek?'Recovery: easy walk, mobility, celebrate.':'Rest, or an optional 20–30 min easy walk, ride, or swim if you feel fresh.'}
-  ]};
+/* ---------- schedule: which weekday holds which session ---------- */
+const DOW_LONG=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const defaultSched=n=>n===3?{run:[1,3,5],cross:[2],strength:[4]}:{run:[1,5],cross:[2,3],strength:[4]};
+function schedProblem(s,n){
+  const all=[...s.run,...s.cross,...s.strength];
+  if(s.run.length!==n) return `Pick exactly ${n} run days.`;
+  if(new Set(all).size!==all.length) return 'Each day can hold only one session.';
+  const rs=[...s.run].sort((a,b)=>a-b);
+  for(let i=0;i<rs.length;i++){const a=rs[i],b=rs[(i+1)%rs.length];if(rs.length>1&&((b-a+7)%7===1))return `${DOW_LONG[a]} and ${DOW_LONG[b]} are back to back. Leave at least one day between runs so tissues can recover.`}
+  if(!s.strength.length) return 'Pick at least one strength day.';
+  if(all.length>6) return 'Keep at least one full rest day.';
+  return '';
 }
+const okSched=(s,n)=>s&&Array.isArray(s.run)&&!schedProblem(s,n);
+// r.sched applies from r.schedFrom (a Monday); earlier weeks keep r.schedPrev so logged days don't change meaning.
+const schedOf=(r,mon)=>{if(!r)return defaultSched(3);
+  if(mon&&r.schedFrom&&iso(mon)<r.schedFrom) return okSched(r.schedPrev,r.runDays)?r.schedPrev:defaultSched(r.runDays);
+  return okSched(r.sched,r.runDays)?r.sched:defaultSched(r.runDays)};
+const runDaysOf=r=>[...schedOf(r).run].sort((a,b)=>a-b);
+
+function weekDays(w,r,mon){
+  const n=r.runDays, wk=weekInfo(w), mins=['20–30','30–40','40–50'][wk.ph];
+  const cross={type:'cross',title:'Cross-train',detail:`${mins} min low-impact cardio: bike, elliptical, swim, rower, or incline walk at an easy-moderate effort (RPE 4–5/10). Builds the aerobic engine without extra impact load.`};
+  const strength={type:'strength',title:'Strength',detail:'Runner strength circuit (see Guide): calf raises, split squats, single-leg RDL, bridges, side plank. 2–3 sets; the last 2 reps of each set should feel hard. Optional 15–20 min easy cardio afterward.'};
+  const rest={type:'rest',title:'Rest',detail:'Rest, or 10 min of easy mobility: calves, hip flexors, hamstrings.'};
+  const k=wk.runs[2].kind, raceWeek=k==='race';
+  const keyLabel=k==='race'?'Race day':k==='goal'?'Goal run':wk.ph===0?`Run ${n}`:'Long run';
+  const runs=pickRuns(wk.runs,n);
+  const days=Array.from({length:7},()=>({...rest}));
+  if(raceWeek){
+    // Race week is the same for everyone so the race lands on Saturday, May 15.
+    const rd=n===3?[1,3,5]:[1,5];
+    rd.forEach((d,i)=>{days[d]={type:'run',title:i===rd.length-1?keyLabel:`Run ${i+1}`,run:runs[i]}});
+    days[4]={type:'rest',title:'Rest',detail:'Full rest before race day. Hydrate and eat a familiar dinner.'};
+    days[6]={type:'rest',title:'Recovery',detail:'Easy walk, mobility, celebrate.'};
+    return {wk,days,raceWeek,moved:false};
+  }
+  const s=schedOf(r,mon), rd=[...s.run].sort((a,b)=>a-b);
+  rd.forEach((d,i)=>{days[d]={type:'run',title:i===rd.length-1?keyLabel:`Run ${i+1}`,run:runs[i]}});
+  s.cross.forEach(d=>{days[d]={...cross}});
+  s.strength.forEach(d=>{days[d]={...strength}});
+  const sw=mon&&r.swaps&&r.swaps[iso(mon)];
+  if(sw&&sw.length){sw.forEach(([a,b])=>{const t=days[a];days[a]={...days[b],movedFrom:days[b].movedFrom??b};days[b]={...t,movedFrom:t.movedFrom??a}});
+    days.forEach((d,i)=>{if(d.movedFrom===i)delete d.movedFrom});}
+  return {wk,days,raceWeek,moved:!!(sw&&sw.length)};
+}
+function backToBack(days){const r=days.map(d=>d.type==='run');for(let i=0;i<7;i++)if(r[i]&&r[(i+1)%7]&&i!==6)return [i,i+1];return null}
 
 /* ---------- runner helpers ---------- */
 const defaultStart=entry=>iso(addDays(RACE_MON,-(TOTAL-1-STARTS[entry])*7));
@@ -120,7 +149,7 @@ function runnerNow(r){
 /* ---------- shared state (Google Sheet via Apps Script) ---------- */
 const API=(window.C10_API||'').trim();
 let ME=null, RUNNERS={}, LOADED=false, LOCAL=false, ERR='', LASTSYNC=null;
-let UI={tab:store.get('c10-tab','today'),sel:null,who:null,join:{name:'',entry:0,runDays:3},confirmLeave:false,newRunner:false};
+let UI={tab:store.get('c10-tab','today'),sel:null,who:null,join:{name:'',entry:0,runDays:3},confirmLeave:false,newRunner:false,codeFor:null,moving:false};
 const mine=()=>RUNNERS[ME]||null;
 const viewing=()=>RUNNERS[UI.who]||null;
 const isMine=()=>UI.who===ME&&!!mine();
@@ -141,7 +170,7 @@ async function call(url,opts){
   let res, text;
   try{res=await fetch(url,{...opts,redirect:'follow',signal:ctl.signal});text=await res.text()}
   catch(e){
-    if(e&&e.name==='AbortError') throw new SyncError('The crew sheet took longer than 15 seconds to answer. Google is probably slow right now.','timeout');
+    if(e&&e.name==='AbortError') throw new SyncError('The Kru sheet took longer than 15 seconds to answer. Google is probably slow right now.','timeout');
     if(!navigator.onLine) throw new SyncError("This phone is offline. Changes stay here and upload when you're back online.",'offline');
     throw new SyncError("Couldn't reach Google. This is usually a brief network problem.",'network');
   }finally{clearTimeout(t)}
@@ -152,31 +181,66 @@ async function call(url,opts){
     if(/Script function not found/i.test(text)) throw new SyncError('The Google script is missing doGet/doPost. Paste Code.gs again, save, and deploy a new version.','script');
     throw new SyncError('The Google script sent back a web page instead of data. Check that it is deployed as a Web app.','badresponse');
   }
-  if(!j||!j.ok) throw new SyncError('The sheet script reported: '+((j&&j.error)||'unknown error'),'script');
-  return j.runners||{};
+  if(j&&j.ok&&j.version!==2) throw new SyncError('The Google script is the old version. Paste in the new Code.gs, then Deploy → Manage deployments → Edit → New version.','oldscript');
+  if(!j||!j.ok){
+    if(j&&j.error==='Unknown action') throw new SyncError('The Google script is the old version. Paste in the new Code.gs, then Deploy → Manage deployments → Edit → New version.','oldscript');
+    throw new SyncError((j&&j.error)||'The sheet script reported an unknown error.',(j&&j.code)||'script');
+  }
+  return j;
 }
-const apiGet=()=>call(API+(API.includes('?')?'&':'?')+'action=all&t='+Date.now(),{});
 // text/plain keeps this a "simple" request, which Apps Script accepts without a CORS preflight
 const apiPost=body=>call(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)});
+const apiAll=()=>apiPost({action:'all',id:ME||'',token:keyFor(ME)});
+
+/* profile keys: each phone holds a secret key per profile; the sheet stores only its fingerprint */
+const B32='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const newKey=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>B32[b%B32.length]).join('');
+const fmtKey=k=>(k||'').match(/.{1,4}/g).join('-');
+const normKey=k=>String(k||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+const keys=()=>store.get('c10-keys',{})||{};
+const keyFor=id=>id?keys()[id]||'':'';
+const setKey=(id,k)=>{const all=keys();if(k)all[id]=k;else delete all[id];store.set('c10-keys',all)};
+const linkFor=id=>location.origin+location.pathname+'#link='+id+'.'+keyFor(id);
 
 /* Unsent edits are kept as a queue of small patches on top of the last copy the sheet confirmed.
    A patch leaves the queue only once a save that included it is acknowledged, so a reopened
    phone replays just the edits that never reached the sheet, never an old full copy. */
 let SERVER={}, QUEUE=[], REV=0, inflight=false, pushTimer=null, retryTimer=null, retryDelay=15000;
-let LOADERR=null, SAVEERR=null;
+let LOADERR=null, SAVEERR=null, AUTHED=false, LINKLOST=null;
 const persistQueue=()=>store.set('c10-queue',{id:ME,rev:REV,patches:QUEUE});
 const clone=o=>JSON.parse(JSON.stringify(o));
 function rebuild(){
   RUNNERS={...SERVER};
   if(ME&&QUEUE.length){let r=SERVER[ME]?clone(SERVER[ME]):null;if(r){QUEUE.forEach(q=>{r=deepMerge(r,q.p)});RUNNERS[ME]=r}}
-  if(ME&&!RUNNERS[ME]&&LOADED&&!QUEUE.length){ME=null;store.set('c10-me',null)}
   if(mine())UNITS=mine().units||'mi';
   if(!UI.who||!RUNNERS[UI.who]) UI.who=mine()?ME:(orderedIds()[0]||null);
 }
-function applyServer(runners){SERVER=runners;LOADED=true;LASTSYNC=new Date();LOADERR=null;rebuild()}
+function setMe(id){ME=id;store.set('c10-me',id);const q=store.get('c10-queue',null);if(q&&q.id===id&&Array.isArray(q.patches)){QUEUE=q.patches;REV=q.rev||0}else{QUEUE=[];REV=0}}
+let claiming=false;
+function applyServer(j){
+  SERVER=j.runners||{};AUTHED=!!j.authed;LOADED=true;LASTSYNC=new Date();LOADERR=null;
+  if(ME){
+    const r=SERVER[ME];
+    if(!r){if(!QUEUE.length){setKey(ME,null);setMe(null)}}
+    else if(!r.locked&&!claiming){claim(ME)}            // unclaimed profile on this phone: take it
+    else if(r.locked&&!AUTHED){LINKLOST=ME;setMe(null)} // key missing or replaced
+  }
+  rebuild();
+}
+async function claim(id,code){
+  claiming=true;
+  const prevMe=ME, token=code||keyFor(id)||newKey();
+  try{
+    const prev=keyFor(id); setKey(id,token); ME=id;
+    const j=await apiPost({action:code?'all':'claim',id,token});
+    if(!j.authed){setKey(id,prev||null);ME=prevMe;throw new SyncError(code?"That code doesn't match. Check it on your other phone under Setup → Use on another phone.":'Could not link this phone.','forbidden')}
+    setMe(id);LINKLOST=null;applyServer(j);UI.who=id;ERR='';return true;
+  }catch(e){if(ME!==id||!AUTHED)ME=prevMe;ERR=e.message||String(e);render();return false}
+  finally{claiming=false}
+}
 async function refresh(){
   if(LOCAL||!API||document.hidden) return;
-  try{applyServer(await apiGet())}
+  try{applyServer(await apiAll())}
   catch(e){LOADERR=e.message||String(e);if(!LOADED)LOADED=true}
   render();
 }
@@ -184,14 +248,15 @@ function schedulePush(ms){clearTimeout(pushTimer);pushTimer=setTimeout(push,ms==
 async function push(){
   if(inflight||!QUEUE.length||!mine()||!SERVER[ME]) return;
   inflight=true; clearTimeout(retryTimer); paintSync();
-  const sentRev=QUEUE[QUEUE.length-1].rev, runner=clone(mine());
+  const sentRev=QUEUE[QUEUE.length-1].rev, runner=clone(mine()), id=ME;
   try{
-    const all=await apiPost({action:'save',id:ME,runner});
-    QUEUE=QUEUE.filter(q=>q.rev>sentRev); persistQueue();
+    const all=await apiPost({action:'save',id,token:keyFor(id),runner});
+    if(ME===id){QUEUE=QUEUE.filter(q=>q.rev>sentRev); persistQueue();}
     SAVEERR=null; retryDelay=15000; applyServer(all);
   }catch(e){
     SAVEERR=e.message||String(e);
-    retryTimer=setTimeout(push,retryDelay); retryDelay=Math.min(retryDelay*2,120000);
+    if(e.kind==='forbidden'){LINKLOST=id;setMe(null);rebuild()}
+    else{retryTimer=setTimeout(push,retryDelay); retryDelay=Math.min(retryDelay*2,120000);}
   }finally{inflight=false}
   render();
   if(QUEUE.length&&!SAVEERR) schedulePush(200);
@@ -226,10 +291,11 @@ function goLocal(){
 
 async function boot(){
   if(!API){goLocal();return}
-  ME=store.get('c10-me',null);
-  store.set('c10-pending',null); // old full-copy format: replaying it could overwrite newer data
-  const q=store.get('c10-queue',null);
-  if(q&&q.id===ME&&Array.isArray(q.patches)){QUEUE=q.patches;REV=q.rev||0}
+  store.set('c10-pending',null); // v1 full-copy format: replaying it could overwrite newer data
+  // device link: #link=<id>.<key>
+  const m=location.hash.match(/^#link=([a-z0-9]{6,32})\.([A-Z0-9]{12,})$/);
+  if(m){setKey(m[1],m[2]);store.set('c10-me',m[1]);history.replaceState(null,'',location.pathname+location.search)}
+  setMe(store.get('c10-me',null));
   render();
   await refresh();
   if(!mine()&&UI.tab==='today') UI.tab='crew';
@@ -260,9 +326,9 @@ function ladder(pw){
 }
 function banners(){
   let h='';
-  if(LOCAL) h+=`<div class="banner">Saving on this device only. The crew sheet isn't connected yet (see README step 2).</div>`;
+  if(LOCAL) h+=`<div class="banner">Saving on this device only. The Kru sheet isn't connected yet (see README step 2).</div>`;
   const e=SAVEERR||LOADERR;
-  if(!LOCAL&&e&&(QUEUE.length||LOADERR)) h+=`<div class="banner err" role="alert"><div><b>${QUEUE.length?plural(QUEUE.length,'change')+' waiting to upload.':"Can't load the latest crew data."}</b> ${esc(e)}${QUEUE.length?' Your changes are safe on this phone.':''}</div><button class="btn small" id="retrySync" type="button">Retry now</button></div>`;
+  if(!LOCAL&&e&&(QUEUE.length||LOADERR)) h+=`<div class="banner err" role="alert"><div><b>${QUEUE.length?plural(QUEUE.length,'change')+' waiting to upload.':"Can't load the latest Kru data."}</b> ${esc(e)}${QUEUE.length?' Your changes are safe on this phone.':''}</div><button class="btn small" id="retrySync" type="button">Retry now</button></div>`;
   if(ERR) h+=`<div class="banner" role="alert">${esc(ERR)}</div>`;
   return h;
 }
@@ -275,24 +341,46 @@ function bindWho(){view.querySelectorAll('[data-who]').forEach(b=>b.onclick=()=>
 function joinCard(){
   if(LOCAL||!LOADED||mine()) return '';
   const ids=Object.keys(RUNNERS).sort((a,b)=>nameOf(a).localeCompare(nameOf(b)));
-  const pick=ids.length&&!UI.newRunner?`<section class="card join">
-    <div><h2>Who's on this phone?</h2><p class="muted">Pick your name to log your own workouts here. Use the same name on every device you train with.</p></div>
-    <div class="who">${ids.map(id=>`<button type="button" data-iam="${esc(id)}"><span class="av" style="--c:${colorOf(id)}">${esc(initial(nameOf(id)))}</span>I'm ${esc(nameOf(id))}</button>`).join('')}</div>
-    <div class="actions"><button class="btn small" id="newRunnerBtn">I'm new: join the crew</button></div>
+  if(UI.codeFor){
+    const id=UI.codeFor;
+    return `<section class="card join">
+      <div><h2>Link this phone to ${esc(nameOf(id))}</h2><p class="muted">On the phone ${esc(nameOf(id))} already uses, open <b>Setup → Use on another phone</b>. Either open the link it shows on this phone, or type its 16-character code here.</p></div>
+      <label class="field" for="j-code"><span>Device code</span><input type="text" id="j-code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" style="font-family:var(--f-mono);letter-spacing:.06em"></label>
+      <div class="actions"><button class="btn primary" id="codeBtn">Link this phone</button><button class="btn" id="codeBack">Back</button></div>
+      <p class="muted" style="font-size:.82rem">Lost the other phone? The Sheet owner can clear ${esc(nameOf(id))}'s cell in column F of the Runners tab; then tap the name again here.</p>
+    </section>`;
+  }
+  const lost=LINKLOST&&RUNNERS[LINKLOST]?`<div class="banner">This phone is no longer linked to ${esc(nameOf(LINKLOST))}. That usually means the profile was linked again on another phone. Tap the name below to enter a device code.</div>`:'';
+  const pick=ids.length&&!UI.newRunner?`${lost}<section class="card join">
+    <div><h2>Who's on this phone?</h2><p class="muted">Pick your name to log your own workouts here. A name with a lock is already linked to someone's phone and needs that phone's device code.</p></div>
+    <div class="who">${ids.map(id=>{const lk=RUNNERS[id].locked&&!keyFor(id);return `<button type="button" data-iam="${esc(id)}"><span class="av" style="--c:${colorOf(id)}">${esc(initial(nameOf(id)))}</span>I'm ${esc(nameOf(id))}${lk?' <span aria-label="linked to another phone">🔒</span>':''}</button>`}).join('')}</div>
+    <div class="actions"><button class="btn small" id="newRunnerBtn">I'm new: join the Kru</button></div>
   </section>`:'';
   if(pick) return pick;
   const J=UI.join;
   const seg=(k,opts)=>`<div class="seg">${opts.map(([v,l])=>`<button type="button" data-j="${k}" data-v="${v}" aria-pressed="${J[k]==v}">${l}</button>`).join('')}</div>`;
   return `<section class="card join">
-    <div><h2>Join the crew</h2><p class="muted">Get your own plan aimed at May 15. Everyone with the link sees each other's progress.</p></div>
+    <div><h2>Join the Kru</h2><p class="muted">Get your own plan aimed at May 15. Everyone with the link sees your plan and completed workouts; your pain ratings stay private to you.</p></div>
     <label class="field" for="j-name"><span>Your first name</span><input type="text" id="j-name" maxlength="24" value="${esc(J.name)}" placeholder="First name" autocomplete="given-name"></label>
     <div class="field"><span>Where are you starting?</span>${seg('entry',[[0,'Not running yet'],[1,'Can run 30 min'],[2,'Can run a 10K']])}<small>Your start date: ${fmtDate(parse(defaultStart(J.entry)))}, timed so the plan ends on race day.</small></div>
-    <div class="field"><span>Run days per week</span>${seg('runDays',[[3,'3 runs + 2 cross'],[2,'2 runs + 3 cross']])}</div>
+    <div class="field"><span>Run days per week</span>${seg('runDays',[[3,'3 runs + 2 cross'],[2,'2 runs + 3 cross']])}<small>You can choose which days in Setup after joining.</small></div>
     <div class="actions"><button class="btn primary" id="joinBtn">Join</button>${ids.length?'<button class="btn" id="backPick">Back</button>':''}</div>
   </section>`;
 }
 function bindJoin(){
-  view.querySelectorAll('[data-iam]').forEach(b=>b.onclick=()=>{ME=b.dataset.iam;store.set('c10-me',ME);UI.who=ME;UI.tab='today';UI.sel=null;UNITS=mine().units||'mi';render()});
+  view.querySelectorAll('[data-iam]').forEach(b=>b.onclick=async()=>{
+    const id=b.dataset.iam, r=RUNNERS[id];
+    if(r.locked&&!keyFor(id)){UI.codeFor=id;ERR='';render();return}
+    b.disabled=true;
+    if(await claim(id)){UI.tab='today';UI.sel=null}
+    render();
+  });
+  const cb=document.getElementById('codeBtn'); if(cb){
+    const inp=document.getElementById('j-code');
+    cb.onclick=async()=>{const k=normKey(inp.value);if(k.length<12){inp.focus();return}cb.disabled=true;cb.textContent='Linking…';
+      if(await claim(UI.codeFor,k)){UI.codeFor=null;UI.tab='today';UI.sel=null}render()};
+    document.getElementById('codeBack').onclick=()=>{UI.codeFor=null;ERR='';render()};
+  }
   const nb=document.getElementById('newRunnerBtn'); if(nb) nb.onclick=()=>{UI.newRunner=true;render()};
   const bp=document.getElementById('backPick'); if(bp) bp.onclick=()=>{UI.newRunner=false;render()};
   const n=document.getElementById('j-name'); if(!n)return;
@@ -300,11 +388,11 @@ function bindJoin(){
   view.querySelectorAll('[data-j]').forEach(b=>b.onclick=()=>{UI.join[b.dataset.j]=+b.dataset.v;render()});
   document.getElementById('joinBtn').onclick=async()=>{
     const nm=(UI.join.name||'').trim(); if(!nm){n.focus();return}
-    if(Object.values(RUNNERS).some(r=>(r.name||'').toLowerCase()===nm.toLowerCase())){ERR=`${nm} is already in the crew. Tap Back and pick that name instead.`;render();return}
-    const id=newId(), r=newRunner(nm,UI.join.entry,UI.join.runDays,'std');
+    if(Object.values(RUNNERS).some(r=>(r.name||'').toLowerCase()===nm.toLowerCase())){ERR=`${nm} is already in the Kru. Tap Back and pick that name instead.`;render();return}
+    const id=newId(), token=newKey(), r=newRunner(nm,UI.join.entry,UI.join.runDays,'std');
     const btn=document.getElementById('joinBtn');btn.disabled=true;btn.textContent='Joining…';
-    try{const all=await apiPost({action:'save',id,runner:r});ME=id;store.set('c10-me',ME);applyServer(all);UI.who=ME;UI.tab='today';UI.sel=null;UI.newRunner=false;ERR=''}
-    catch(e){ERR='Could not join. '+(e.message||'Try again in a moment.')}
+    try{setKey(id,token);ME=id;const all=await apiPost({action:'save',id,token,runner:r});setMe(id);applyServer(all);UI.who=ME;UI.tab='today';UI.sel=null;UI.newRunner=false;ERR=''}
+    catch(e){setKey(id,null);ME=null;ERR='Could not join. '+(e.message||'Try again in a moment.')}
     render();
   };
 }
@@ -344,12 +432,13 @@ function schedulePill(r){
   if(d<0) return {c:'g',t:`Plan ends ${-d} wk before race`};
   return {c:'a',t:`Plan ends ${d} wk after race`};
 }
-function weekStatus(r,mon,days){
+function weekStatus(r,mon,days,others){
   const logs=r.logs||{}, t=today();
   const runs=[];days.forEach((d,i)=>{if(d.type!=='run')return;const dt=addDays(mon,i),L=logs[iso(dt)];runs.push({i,dt,L})});
   const done=runs.filter(x=>isDone(x.L)), skipped=runs.filter(x=>statusOf(x.L)==='skipped');
   const skipNote=skipped.length?` ${plural(skipped.length,'run')} skipped.`:'';
   if(!done.length) return {c:'',t:skipped.length?'No runs completed yet':'No runs logged yet this week',d:(r.mode==='rtr'?'Log pain during each run and again the next morning.':'Log effort after each run.')+skipNote};
+  if(r.mode==='rtr'&&others) return {c:'',t:`${plural(done.length,'run')} completed`,d:'Pain check-ins are private to each runner.'+skipNote};
   if(r.mode==='rtr'){
     const vals=[];const missing=[];let pendingMorning=false;
     done.forEach(x=>{const L=x.L;
@@ -369,7 +458,7 @@ function weekStatus(r,mon,days){
 }
 
 function renderToday(){
-  if(!LOADED){view.innerHTML=`<p class="muted">Loading the crew…</p>`;return}
+  if(!LOADED){view.innerHTML=`<p class="muted">Loading the Kru…</p>`;return}
   const r=viewing();
   if(!r){view.innerHTML=`<div class="stack">${banners()}${joinCard()||'<p class="muted">Nobody has joined yet.</p>'}</div>`;bindJoin();return}
   const own=isMine(), n=r.runDays, logs=r.logs||{};
@@ -379,11 +468,11 @@ function renderToday(){
     view.innerHTML=`<div class="stack">${head}<div class="card session t-run"><span class="chip">Program complete</span><h2>10 miles: done</h2><p class="muted">All 27 weeks finished. Keep 2–3 easy runs a week plus strength to hold your fitness.</p></div>${timeline(r,TOTAL)}</div>`;
     bindWho();bindJoin();return;
   }
-  const {wk,days}=weekDays(pw,n);
+  const {wk,days,raceWeek,moved}=weekDays(pw,r,mon);
   const tDow=(t.getDay()+6)%7;
   if(UI.sel===null) UI.sel=notStarted?1:tDow;
   const day=days[UI.sel], date=addDays(mon,UI.sel), key=iso(date), L=logs[key]||{}, S=statusOf(L);
-  const ph=PHASES[wk.ph], st=weekStatus(r,mon,days), held=(r.holds||[]).filter(h=>h===cw).length;
+  const ph=PHASES[wk.ph], st=weekStatus(r,mon,days,!own), held=(r.holds||[]).filter(h=>h===cw).length;
   const isRace=key===RACE&&day.type==='run', isToday=UI.sel===tDow&&!notStarted;
   const past=dayNum(date)<dayNum(t);
 
@@ -409,6 +498,12 @@ function renderToday(){
       <button type="button" data-st="modified" aria-pressed="${S==='modified'}">Done, modified</button>
       <button type="button" data-st="skipped" aria-pressed="${S==='skipped'}">Skipped</button></div>
       ${S==='modified'?`<label class="field" for="f-note"><small>What changed? (optional)</small><input type="text" id="f-note" maxlength="80" value="${esc(L.note||'')}" placeholder="e.g. walked the last 2 intervals"></label>`:''}</div>`:'';
+  const b2b=backToBack(days);
+  const canMove=own&&!raceWeek&&!S&&day.type!=='rest';
+  const moveUI=own&&!raceWeek?`<div class="move">
+      ${canMove?(UI.moving?`<span class="eyebrow">Move ${esc(day.title.toLowerCase())} to</span><div class="seg">${days.map((d,i)=>{if(i===UI.sel)return '';const lg=statusOf(logs[iso(addDays(mon,i))]);return `<button type="button" data-mv="${i}" ${lg?'disabled':''} title="${lg?'Already logged':''}">${DOW[i]} <small>${esc(d.type==='rest'?'rest':d.title)}</small></button>`}).join('')}</div><small class="muted">The two days swap. Days you've already logged can't be swapped.</small><button class="btn small" id="mvCancel" type="button">Cancel</button>`:`<button class="btn small" id="mvStart" type="button">Move to another day</button>`):''}
+      ${moved&&!((r.swaps||{})[iso(mon)]||[]).flat().some(i=>statusOf(logs[iso(addDays(mon,i))]))?`<button class="btn small" id="mvReset" type="button">Undo this week's moves</button>`:''}
+    </div>`:'';
   const ro=!own&&day.type!=='rest'?`<p class="ro">${S==='skipped'?'Skipped':S==='modified'?'Done, modified'+(L.note?`: ${esc(L.note)}`:''):S?'Completed':'Not logged yet'}${L.rpe!=null?` · effort ${L.rpe}/10`:''}${L.pain!=null?` · pain ${L.pain}/10`:''}${L.morning!=null?` · next morning ${L.morning}/10`:''}</p>`:'';
   const ratings=own&&day.type==='run'&&isDone(L)?`<div class="logs">
       ${ratingRow('rpe','Effort (RPE)',1,10,L.rpe??null,'1 = very easy, 4 = easy talking pace, 8+ = can\'t talk')}
@@ -419,13 +514,15 @@ function renderToday(){
     ${head}
     <p class="where">${own?'':esc(nameOf(UI.who))+' · '}Week ${pw+1} of ${TOTAL} · ${ph.name}, week ${wk.wip}${notStarted?` · starts ${fmtDate(mon)}`:''}</p>
     <section class="card session t-${day.type}">
-      <span class="chip">${DOW[UI.sel]} ${fmtDate(date)} · ${isRace?'Race day':day.title}${isToday?' · today':''}</span>
+      <span class="chip">${DOW[UI.sel]} ${fmtDate(date)} · ${isRace?'Race day':day.title}${isToday?' · today':''}${day.movedFrom!=null?' · moved from '+DOW[day.movedFrom]:''}</span>
       <h2>${esc(title)}</h2>
       <p class="sub">${esc(sub)}</p>
       ${primary?`<div class="actions">${primary}</div>`:''}
       ${body}
       ${statusBtns}${ro}
       ${ratings}
+      ${b2b&&own?`<p class="warnline">Heads up: ${DOW[b2b[0]]} and ${DOW[b2b[1]]} are back-to-back run days this week. Keep both easy, or move one.</p>`:''}
+      ${moveUI}
     </section>
     ${wk.note?`<p class="muted" style="font-size:.9rem">${wk.note}</p>`:''}
     <div class="stack" style="gap:8px">
@@ -452,13 +549,18 @@ function renderToday(){
 
   bindWho();bindJoin();
   view.querySelectorAll('[data-sel]').forEach(el=>{
-    const go=()=>{UI.sel=+el.dataset.sel;render()};
+    const go=()=>{UI.sel=+el.dataset.sel;UI.moving=false;render()};
     el.addEventListener('click',go);el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();go()}});
   });
   if(!own)return;
   view.querySelectorAll('[data-done]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();toggle(b.dataset.done)}));
   view.querySelectorAll('[data-st]').forEach(b=>b.onclick=()=>setStatus(key,b.dataset.st));
   view.querySelectorAll('[data-rate]').forEach(b=>b.onclick=()=>{const k=b.dataset.rate,v=+b.dataset.v;saveMine({logs:{[key]:{[k]:L[k]===v?null:v}}})});
+  const sk=iso(mon), cur=()=>((r.swaps||{})[sk]||[]).map(x=>[...x]);
+  const ms=document.getElementById('mvStart'); if(ms) ms.onclick=()=>{UI.moving=true;render()};
+  const mc=document.getElementById('mvCancel'); if(mc) mc.onclick=()=>{UI.moving=false;render()};
+  view.querySelectorAll('[data-mv]').forEach(b=>b.onclick=()=>{const to=+b.dataset.mv;UI.moving=false;const from=UI.sel;UI.sel=to;saveMine({swaps:{[sk]:[...cur(),[from,to]]}})});
+  const mr=document.getElementById('mvReset'); if(mr) mr.onclick=()=>{UI.moving=false;saveMine({swaps:{[sk]:[]}})};
   const nt=document.getElementById('f-note'); if(nt) nt.onchange=()=>saveMine({logs:{[key]:{note:nt.value.trim()}}});
   const tb=document.getElementById('startTimer'); if(tb) tb.onclick=()=>openTimer(fullSegs(day.run),sessionTitle(day.run),key);
   const holds=()=>[...(r.holds||[])];
@@ -481,13 +583,13 @@ function renderCrew(){
     let weekHtml='', summary='', counts='', st={c:'',t:''};
     if(N.finished){summary='Program complete';}
     else{
-      const {wk,days:ds}=weekDays(N.pw,r.runDays), logs=r.logs||{};
+      const {wk,days:ds}=weekDays(N.pw,r,N.mon), logs=r.logs||{};
       const tDow=(t.getDay()+6)%7;
       const c={run:[0,0],cross:[0,0],strength:[0,0]};
       ds.forEach((d,j)=>{if(!c[d.type])return;c[d.type][1]++;if(isDone(logs[iso(addDays(N.mon,j))]))c[d.type][0]++});
       weekHtml=`<div class="sq">${ds.map((d,j)=>{const k=iso(addDays(N.mon,j)),s=statusOf(logs[k]);return `<span class="t-${d.type} ${d.type==='rest'?'rest':''} ${s==='skipped'?'skip':s?'on':''} ${j===tDow&&!N.notStarted?'tod':''}" title="${DOW[j]}: ${esc(d.type==='run'?sessionTitle(d.run):d.title)}${s?' ('+s+')':''}">${DOW[j].charAt(0)}</span>`}).join('')}</div>`;
       counts=`<div class="counts"><span><b>${c.run[0]} of ${c.run[1]}</b> runs</span><span><b>${c.cross[0]} of ${c.cross[1]}</b> cross</span><span><b>${c.strength[0]} of ${c.strength[1]}</b> strength</span></div>`;
-      st=weekStatus(r,N.mon,ds);
+      st=weekStatus(r,N.mon,ds,id!==ME);
       summary=N.notStarted?`Starts ${fmtDate(N.mon)} · ${PHASES[wk.ph].name}`:`This week · ${PHASES[wk.ph].name}, week ${wk.wip} of ${PHASES[wk.ph].weeks}`;
     }
     const all=Object.values(r.logs||{}).filter(isDone).length;
@@ -510,7 +612,7 @@ function renderCrew(){
       <div class="count">${days}<small>days to go</small></div>
     </section>
     ${joinCard()}
-    ${!LOADED?'<p class="muted">Loading the crew…</p>':ids.length?`<div class="crew">${cards}</div>`:'<p class="muted">Nobody has joined yet. Join above, then share this page with your crew.</p>'}
+    ${!LOADED?'<p class="muted">Loading the Kru…</p>':ids.length?`<div class="crew">${cards}</div>`:'<p class="muted">Nobody has joined yet. Join above, then share this page with your Kru.</p>'}
     ${LOADED&&!LOCAL?'<p class="muted" style="font-size:.82rem">Everyone with the link sees each other\'s plans and logs. Refreshes every minute.</p>':''}
   </div>`;
   bindJoin();
@@ -524,7 +626,7 @@ function milestone(r){
   const startMon=startMonR(r);
   keys.forEach(k=>{
     const d=parse(k), cw=calWeekR(r,d); if(cw<0)return;
-    const w=progWeekR(r,cw), dow=(d.getDay()+6)%7, {days}=weekDays(w,r.runDays), day=days[dow];
+    const w=progWeekR(r,cw), dow=(d.getDay()+6)%7, {days}=weekDays(w,r,mondayOf(d)), day=days[dow];
     if(!day||day.type!=='run')return;
     const ru=day.run;
     if(ru.kind==='interval'&&ru.seg.length===1) best=`First ${runSeconds(ru.seg)/60}-minute continuous run`;
@@ -540,17 +642,17 @@ function renderPlan(){
   if(!LOADED){view.innerHTML=`<p class="muted">Loading…</p>`;return}
   const r=viewing()||{entry:0,runDays:3,start:defaultStart(0),holds:[]};
   const N=runnerNow(r), cur=N.notStarted?-1:N.pw, focus=N.notStarted?STARTS[r.entry]:N.pw;
-  const runDow=r.runDays===3?['Tue','Thu','Sat']:['Tue','Sat'];
+  const S0=schedOf(r), runDow=runDaysOf(r).map(d=>DOW[d]), runDowBase=runDow, nm=a=>[...a].sort((x,y)=>x-y).map(d=>DOW[d]).join(' and ');
   const weekMon={};for(let cw=0;cw<80;cw++){const w=progWeekR(r,cw);if(w>=TOTAL)break;if(weekMon[w]==null)weekMon[w]=addDays(startMonR(r),cw*7)}
   view.innerHTML=`<div class="stack" style="gap:20px">
     ${whoBar()}
-    <p class="muted" style="max-width:65ch">${viewing()?esc(nameOf(UI.who))+': ':''}${r.runDays} runs a week on ${runDow.join(', ')}. Cross-training on Wed${r.runDays===2?' and Thu':''}, strength on Fri. Times shown are per session, including warm-up and cool-down walks.</p>
+    <p class="muted" style="max-width:65ch">${viewing()?esc(nameOf(UI.who))+': ':''}${r.runDays} runs a week on ${runDow.join(', ')}. ${S0.cross.length?'Cross-training on '+nm(S0.cross)+', s':'S'}trength on ${nm(S0.strength)}. Times are per session, including warm-up and cool-down walks. Race week is fixed for everyone: runs on Tue${r.runDays===3?', Thu':''} and the race on Saturday.</p>
     ${PHASES.map((p,pi)=>{
       if(STARTS[pi]+p.weeks<=STARTS[r.entry]) return `<section class="phase"><header><h2 class="muted">${p.name}</h2><span class="muted" style="font-size:.88rem">Skipped: starting at ${PHASES[r.entry].name}</span></header></section>`;
       const here=focus>=STARTS[pi]&&focus<STARTS[pi]+p.weeks, done=focus>=STARTS[pi]+p.weeks;
       let rows='';
       for(let w=STARTS[pi];w<STARTS[pi]+p.weeks;w++){
-        const wk=weekInfo(w), rs=pickRuns(wk.runs,r.runDays), m=weekMon[w];
+        const wk=weekInfo(w), rs=pickRuns(wk.runs,r.runDays), m=weekMon[w], runDow=w===TOTAL-1?(r.runDays===3?['Tue','Thu','Sat']:['Tue','Sat']):runDowBase;
         const mins=pi===0?rs.map(x=>Math.round(fullSegs(x).reduce((a,s)=>a+s[1],0)/60)):[], lo=Math.min(...mins), hi=Math.max(...mins);
         const tot=pi===0?(lo===hi?`${lo} min each`:`${lo}–${hi} min each`):`Week total ${fmtD(rs.reduce((a,x)=>a+x.mi,0))}`;
         rows+=`<div class="wrow ${w<cur?'past':''} ${w===cur?'cur':''}">
@@ -598,7 +700,7 @@ function renderGuide(){
 
   <section class="card"><div class="prose">
     <h2>Ready to run?</h2>
-    <p>Commonly used clinical criteria before starting a return-to-run program. ${me?'Your ticks are saved to your plan.':'Join the crew to save your ticks.'}</p>
+    <p>Commonly used clinical criteria before starting a return-to-run program. ${me?'Your ticks are saved to your plan.':'Join the Kru to save your ticks.'}</p>
     <div style="display:flex;flex-direction:column;gap:10px">${READY_ITEMS.map((t,i)=>`<label class="chk" for="r${i}"><input type="checkbox" id="r${i}" data-r="${i}" ${ready[i]?'checked':''} ${me?'':'disabled'}><span>${t}</span></label>`).join('')}</div>
     <p class="muted" id="readyCount" style="font-size:.88rem"></p>
   </div></section>
@@ -659,15 +761,20 @@ function renderSetup(){
   const aligned=r.start===defaultStart(r.entry);
   view.innerHTML=`<div class="stack">${banners()}<section class="card" style="gap:22px">
     <h2>Your setup</h2>
-    ${LOCAL?'':`<label class="field" for="f-name"><span>Name shown to the crew</span><input type="text" id="f-name" maxlength="24" value="${esc(r.name||'')}" style="font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);max-width:320px"></label>`}
+    ${LOCAL?'':`<label class="field" for="f-name"><span>Name shown to the Kru</span><input type="text" id="f-name" maxlength="24" value="${esc(r.name||'')}" style="font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);max-width:320px"></label>`}
     <div class="field"><span>Start at</span>${seg('entry',[[0,'Couch → 5K'],[1,'5K → 10K'],[2,'10K → 10 mi']])}<small>Changing this resets your start date so the plan still ends on May 15.</small></div>
     <label class="field" for="f-start"><span>Start date</span><input type="date" id="f-start" value="${r.start}"><small>${aligned?'Race-aligned: your last week is race week.':`Race-aligned start would be ${fmtDate(parse(defaultStart(r.entry)))}.`} Starting earlier banks buffer weeks for holidays or illness.</small>${aligned?'':`<button class="btn small" id="alignStart" style="width:max-content">Use race-aligned start</button>`}</label>
-    <div class="field"><span>Run days per week</span>${seg('runDays',[[3,'3 runs + 2 cross'],[2,'2 runs + 3 cross']])}<small>2-run mode keeps Run 1 and the key run; the middle run becomes cross-training.</small></div>
+    <div class="field"><span>Run days per week</span>${seg('runDays',[[3,'3 runs + 2 cross'],[2,'2 runs + 3 cross']])}<small>Changing this resets your training days to the default.</small></div>
+    ${schedEditor(r)}
     <div class="field"><span>Mode</span>${seg('mode',[['std','Standard'],['rtr','Return to run']])}<small>Return to run adds pain logging (during and next morning) and traffic-light progression rules.</small></div>
     <div class="field"><span>Units</span>${seg('units',[['mi','Miles'],['km','Kilometers']])}</div>
     <div class="field"><span>Repeated weeks</span><p class="muted">${(r.holds||[]).length?`${r.holds.length} week(s) added by repeats or step-backs.`:'None yet.'}</p>${(r.holds||[]).length?'<button class="btn small" id="clearHolds" style="width:max-content">Clear repeats</button>':''}</div>
-    ${LOCAL?'':`<div class="field"><span>This phone</span><small>Logging as ${esc(r.name||'')}. Switch if someone else uses this device.</small><button class="btn small" id="switchMe" style="width:max-content">Switch runner</button></div>`}
-    ${LOCAL?'':`<div class="field"><span>Leave the crew</span><small>Deletes your plan and every log. This cannot be undone.</small>${UI.confirmLeave?`<div class="actions"><button class="btn small" id="leaveYes" style="border-color:var(--bad);color:var(--bad)">Delete my plan and logs</button><button class="btn small" id="leaveNo">Keep my plan</button></div>`:`<button class="btn small" id="leave" style="width:max-content">Leave crew…</button>`}</div>`}
+    ${LOCAL?'':`<div class="field"><span>Use on another phone</span><small>Open this link on your other phone, or type the code there. Anyone with it can log as you, so only send it to yourself.</small>
+      <code class="keycode" id="keyCode">${esc(fmtKey(keyFor(ME)))}</code>
+      <div class="actions"><button class="btn small" id="copyLink" type="button">Copy link</button><button class="btn small" id="copyCode" type="button">Copy code</button><span class="muted" id="copied" aria-live="polite" style="font-size:.82rem"></span></div>
+      <input type="text" id="linkText" readonly value="${esc(linkFor(ME))}" style="font-family:var(--f-mono);font-size:.75rem" aria-label="Device link" hidden></div>`}
+    ${LOCAL?'':`<div class="field"><span>This phone</span><small>Logging as ${esc(r.name||'')}. Switch if someone else uses this device. Your key stays on this phone so you can switch back.</small><button class="btn small" id="switchMe" style="width:max-content">Switch runner</button></div>`}
+    ${LOCAL?'':`<div class="field"><span>Leave the Kru</span><small>Deletes your plan and every log. This cannot be undone.</small>${UI.confirmLeave?`<div class="actions"><button class="btn small" id="leaveYes" style="border-color:var(--bad);color:var(--bad)">Delete my plan and logs</button><button class="btn small" id="leaveNo">Keep my plan</button></div>`:`<button class="btn small" id="leave" style="width:max-content">Leave Kru…</button>`}</div>`}
   </section></div>`;
   const nm=document.getElementById('f-name'); if(nm) nm.onchange=()=>{const v=nm.value.trim();if(v)saveMine({name:v})};
   document.getElementById('f-start').onchange=e=>{if(e.target.value){UI.sel=null;saveMine({start:iso(mondayOf(parse(e.target.value))),holds:[]})}};
@@ -675,13 +782,47 @@ function renderSetup(){
   view.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{
     const k=b.dataset.k,v=(k==='runDays'||k==='entry')?+b.dataset.v:b.dataset.v;UI.sel=null;
     if(k==='units')UNITS=v;
-    saveMine(k==='entry'?{entry:v,start:defaultStart(v),holds:[]}:{[k]:v});
+    saveMine(k==='entry'?{entry:v,start:defaultStart(v),holds:[]}:k==='runDays'?{runDays:v,sched:defaultSched(v),schedPrev:null,schedFrom:null,swaps:{}}:{[k]:v});UI.schedDraft=null;
   });
+  bindSched(r);
+  const copy=async(txt,msg)=>{const out=document.getElementById('copied');try{await navigator.clipboard.writeText(txt);out.textContent=msg}catch(e){const li=document.getElementById('linkText');li.hidden=false;li.value=txt;li.select();out.textContent='Select and copy the text above.'}};
+  const cl=document.getElementById('copyLink'); if(cl) cl.onclick=()=>copy(linkFor(ME),'Link copied');
+  const cc=document.getElementById('copyCode'); if(cc) cc.onclick=()=>copy(fmtKey(keyFor(ME)),'Code copied');
   const ch=document.getElementById('clearHolds'); if(ch) ch.onclick=()=>saveMine({holds:[]});
-  const sw=document.getElementById('switchMe'); if(sw) sw.onclick=async()=>{if(QUEUE.length)await push();if(QUEUE.length){ERR=`${plural(QUEUE.length,'change')} from ${mine().name} haven't uploaded yet. Switch runners once they're saved so they aren't lost.`;render();return}ME=null;store.set('c10-me',null);UI.newRunner=false;UI.tab='crew';render()};
+  const sw=document.getElementById('switchMe'); if(sw) sw.onclick=async()=>{if(QUEUE.length)await push();if(QUEUE.length){ERR=`${plural(QUEUE.length,'change')} from ${mine().name} haven't uploaded yet. Switch runners once they're saved so they aren't lost.`;render();return}setMe(null);UI.newRunner=false;UI.tab='crew';render()};
   const lv=document.getElementById('leave'); if(lv) lv.onclick=()=>{UI.confirmLeave=true;render()};
   const ln=document.getElementById('leaveNo'); if(ln) ln.onclick=()=>{UI.confirmLeave=false;render()};
-  const ly=document.getElementById('leaveYes'); if(ly) ly.onclick=async()=>{UI.confirmLeave=false;try{const all=await apiPost({action:'delete',id:ME});QUEUE=[];persistQueue();ME=null;store.set('c10-me',null);applyServer(all);UI.who=orderedIds()[0]||null;UI.tab='crew'}catch(e){ERR='Could not delete your plan. '+(e.message||'')}render()};
+  const ly=document.getElementById('leaveYes'); if(ly) ly.onclick=async()=>{UI.confirmLeave=false;try{const all=await apiPost({action:'delete',id:ME,token:keyFor(ME)});QUEUE=[];persistQueue();setKey(ME,null);setMe(null);applyServer(all);UI.who=orderedIds()[0]||null;UI.tab='crew'}catch(e){ERR='Could not delete your plan. '+(e.message||'')}render()};
+}
+
+function schedEditor(r){
+  const n=r.runDays, d=UI.schedDraft||clone(schedOf(r));
+  const typeAt=i=>d.run.includes(i)?'run':d.cross.includes(i)?'cross':d.strength.includes(i)?'strength':'rest';
+  const prob=schedProblem(d,n), dirtyS=!!UI.schedDraft;
+  const opt=[['run','Run'],['cross','Cross'],['strength','Strength'],['rest','Rest']];
+  return `<div class="field"><span>Training days</span><small>Pick ${n} run days with a day between each, at least one strength day, and one full rest day. Your long run lands on the last run day of the week.</small>
+    <div class="sched">${DOW.map((nm,i)=>`<div class="srow"><b>${nm}</b><div class="seg">${opt.map(([v,l])=>`<button type="button" data-sd="${i}" data-sv="${v}" aria-pressed="${typeAt(i)===v}" class="s-${v}">${l}</button>`).join('')}</div></div>`).join('')}</div>
+    ${prob?`<p class="warnline" role="alert">${esc(prob)}</p>`:''}
+    ${dirtyS?`<div class="actions"><button class="btn primary small" id="schedSave" ${prob?'disabled':''}>Save training days</button><button class="btn small" id="schedCancel">Cancel</button></div><small>If you've already logged something this week, new days start next Monday.</small>`:UI.schedMsg?`<small role="status" style="color:var(--ok)">${esc(UI.schedMsg)}</small>`:''}
+    <small>Race week is the same for everyone so you all race on Saturday, May 15.</small></div>`;
+}
+function bindSched(r){
+  view.querySelectorAll('[data-sd]').forEach(b=>b.onclick=()=>{
+    const i=+b.dataset.sd, v=b.dataset.sv, d=UI.schedDraft||clone(schedOf(r));UI.schedMsg='';
+    ['run','cross','strength'].forEach(k=>{d[k]=d[k].filter(x=>x!==i)});
+    if(v!=='rest')d[v].push(i);
+    UI.schedDraft=d;render();
+  });
+  const sv=document.getElementById('schedSave'); if(sv) sv.onclick=()=>{
+    const d=UI.schedDraft;UI.schedDraft=null;UI.sel=null;
+    const N=runnerNow(r), thisMon=N.notStarted?startMonR(r):N.mon, logs=r.logs||{};
+    const loggedThisWeek=[0,1,2,3,4,5,6].some(i=>statusOf(logs[iso(addDays(thisMon,i))]));
+    const from=iso(loggedThisWeek?addDays(thisMon,7):thisMon);
+    const swaps={...(r.swaps||{})};Object.keys(swaps).forEach(k=>{if(k>=from)swaps[k]=[]});
+    UI.schedMsg=loggedThisWeek?`Saved. New days start ${fmtDate(parse(from))}, since you've already logged workouts this week.`:'Saved.';
+    saveMine({sched:d,schedPrev:clone(schedOf(r,thisMon)),schedFrom:from,swaps});
+  };
+  const sc=document.getElementById('schedCancel'); if(sc) sc.onclick=()=>{UI.schedDraft=null;render()};
 }
 
 /* ---------- timer ---------- */
